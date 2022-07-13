@@ -24,6 +24,9 @@ from wilds.common.grouper import CombinatorialGrouper
 
 from utils import progress_bar
 
+# rohan: if parts of this code are lifted from another repo, let's put a link to that here
+# so that we remember to give appropriate credit in the future
+
 '''
 Each query strategy below returns a list of len=query_size with indices of 
 samples that are to be queried.
@@ -118,6 +121,7 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, grouper, query_size
         pool_idx = random.sample(range(1, len(unlabeled_idx)), pool_size)
         pool_loader = DataLoader(Subset(dataset, unlabeled_idx[pool_idx]), shuffle = False, batch_size=batch_size, num_workers=num_workers)
     else:
+        # rohan: use WildsSubset here to maintain consistency? you also might need the group information for the other AL schemes we experiment with
         pool_loader = DataLoader(Subset(dataset, unlabeled_idx), shuffle = False, batch_size=batch_size, num_workers=num_workers)
     
     print("Querying ...")
