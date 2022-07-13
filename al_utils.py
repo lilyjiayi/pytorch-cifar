@@ -18,6 +18,10 @@ import torchvision
 import torchvision.transforms as transforms
 from torchvision import utils, models
 
+from wilds.datasets.wilds_dataset import WILDSSubset
+from wilds.common.data_loaders import get_train_loader, get_eval_loader
+from wilds.common.grouper import CombinatorialGrouper
+
 from utils import progress_bar
 
 '''
@@ -29,6 +33,8 @@ Arguments:
 - device (torch.device): 
 - dataloader (torch.utils.data.DataLoader)
 - query_size (int): number of samples to be queried for labels (default=40)
+
+Adapted from https://github.com/opetrova/Tutorials/blob/master/Active%20Learning%20image%20classification%20PyTorch.ipynb
 '''
 
 def least_confidence_query(model, device, data_loader, query_size=10):
@@ -100,10 +106,12 @@ Modifies:
 - dataset: edits the labels of samples that have been queried; updates dataset.unlabeled_mask
 '''
 
-def query_the_oracle(unlabeled_mask, model, device, dataset, query_size=40, query_strategy='least_confidence', 
+def query_the_oracle(unlabeled_mask, model, device, dataset, grouper, query_size=40, query_strategy='least_confidence', 
                      pool_size=0, batch_size=8, num_workers=2):
     
     unlabeled_idx = np.nonzero(unlabeled_mask)[0]
+
+    #WILDSSubset(train_data, labeled_idx, transform=None)
     
     # Select a pool of samples to query from
     if pool_size > 0:    
@@ -123,13 +131,50 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, query_size=40, quer
             sample_idx = random.sample(pool_idx, query_size)
         else:
             sample_idx = random.sample(range(1, len(unlabeled_idx)), query_size)
-    
+
+    #print the group information of selected datapoints
+    selected = WILDSSubset(dataset, unlabeled_idx[sample_idx], transform=None)
+    meta_array = selected.metadata_array
+    group, group_counts = grouper.metadata_to_group(meta_array, return_counts=True)
+    # for i in range(len(group_counts)):
+    #     print("group: {}, count: {} \n".format(grouper.group_str(i), group_counts[i]))
+        
     # update the unlabeled mask, change sign from 1 to 0 for newly queried samples
     if pool_size > 0:
         unlabeled_mask[unlabeled_idx[pool_idx][sample_idx]] = 0
     else:
         unlabeled_mask[unlabeled_idx[sample_idx]] = 0
+    
+    return group_counts
+    
 
+
+
+# From https://github.com/google-research/big_transfer.git bit_hyperrule.py
+def get_schedule(dataset_size):
+  if dataset_size < 20_000:
+    return [100, 200, 300, 400, 500]
+  elif dataset_size < 500_000:
+    return [500, 3000, 6000, 9000, 10_000]
+  else:
+    return [500, 6000, 12_000, 18_000, 20_000]
+
+
+def get_lr(step, dataset_size, base_lr=0.003):
+  """Returns learning-rate for `step` or None at the end."""
+  supports = get_schedule(dataset_size)
+  # Linear warmup
+  if step < supports[0]:
+    return base_lr * step / supports[0]
+  # End of training
+  elif step >= supports[-1]:
+    return None
+  # Staircase decays by factor of 10
+  else:
+    for s in supports[1:]:
+      if s < step:
+        base_lr /= 10
+    return base_lr
 
             
             
