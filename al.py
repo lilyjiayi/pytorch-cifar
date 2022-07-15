@@ -29,11 +29,14 @@ import wandb
 def main():
     parser = argparse.ArgumentParser(description='Active Learning Training')
     parser.add_argument('--lr', default=1e-4, type=float, help='learning rate')
-    parser.add_argument('--batch_size', default=16, type=int, help='batch size')
-    parser.add_argument('--num_epoch', default=10, type=int, help='number of epochs to train for each query round')
+    parser.add_argument('--batch_size', default=128, type=int, help='batch size')
+    parser.add_argument('--num_epoch', default=4, type=int, help='number of epochs to train for each query round')
+    parser.add_argument('--inum_epoch', default=3, type=int, help='number of epochs to train for initial training')
     parser.add_argument('--schedule', default="cosine", type=str) # 'constant', 'cosine'
     parser.add_argument('--new_model', '-n', action='store_true',
                         help='train a new model after each query round')
+    parser.add_argument('--no_al',  action='store_true',
+                        help='train a resnet baseline')
     parser.add_argument('--root_dir', default="/self/scr-sync/nlp/waterbirds", type=str) #root dir for accessing dataset
     parser.add_argument('--wandb_group', default=None, type=str)
     #checkpoints are saved at /nlp/scr/jiayili/pytorch-cifar/checkpoints
@@ -47,7 +50,7 @@ def main():
     parser.add_argument('--seed_size', default=40, type=int)
     parser.add_argument('--num_queries', default=56, type=int)
     parser.add_argument('--query_size', default=5, type=int)
-    parser.add_argument('--query_strategy', default='least_confidence', type=Str) # 'least_confidence', 'margin', 'random'
+    parser.add_argument('--query_strategy', default='least_confidence', type=str) # 'least_confidence', 'margin', 'random'
     args = parser.parse_args()
 
     #wandb setup
@@ -138,67 +141,58 @@ def main():
             best_acc, start_epoch, curr_query, np.sum(unlabeled_mask == 0)))
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                        momentum=0.9, weight_decay=1e-4)
-    if args.schedule == "constant":
-        lambda_cons = lambda epoch: 1
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda_cons, last_epoch=-1, verbose=False)
-    elif args.schedule == "cosine":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_epoch*len(train_loader))
 
-    # Label the initial subset
-    group_counts = query_the_oracle(unlabeled_mask, net, device, train_val_data, grouper, query_size=args.seed_size, 
-                    query_strategy='random', pool_size=0, batch_size=args.batch_size)
-    query_info = dict()
-    group_counts = np.array(group_counts)
-    for i in range(len(group_counts)):
-        query_info[grouper.group_str(i)] = 100.0 * group_counts[i]/np.sum(group_counts)
-        print("group: {}, count: {} \n".format(grouper.group_str(i), group_counts[i]))
-    wandb.log(query_info)
-
-    # Pre-train on the initial subset
-    epoch = start_epoch
-    #query_start_epoch = np.zeros(args.num_queries + 1) # store the start epoch index for each query; the first query is the initial seed set with start epoch 0
+    # Initialize counters
     curr_query = 0
-    step = 0 
+    epoch = start_epoch # keeps track of overall epoch 
+    round_step = 0 #keeps track of number of steps for this query round
+    #query_start_epoch = np.zeros(args.num_queries + 1) # store the start epoch index for each query; the first query is the initial seed set with start epoch 0
 
+     # Label the initial subset
+    if args.no_al:
+        unlabeled_mask = np.zeros(len(train_data))
+        args.num_queries = 0
+    else:
+        idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, grouper, query_size=args.seed_size, 
+                        query_strategy='random', pool_size=0, batch_size=args.batch_size)
+        print_log_selection_info(idx, train_val_data, grouper, curr_query, "selection_per_query")
+
+    # Prepare train loader
     labeled_idx = np.where(unlabeled_mask == 0)[0]
+    print_log_selection_info(labeled_idx, train_val_data, grouper, curr_query, "selection_accumulating")
     data_size = np.sum(unlabeled_mask == 0)
     train_loader = get_train_loader("standard", WILDSSubset(train_data, labeled_idx, transform=None), 
                                     batch_size=args.batch_size, num_workers=2)
-    if args.schedule == "cosine":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_epoch*len(train_loader))
-    # previous_test_acc = 0
-    # current_test_acc = 1
-    # previous_train_acc = 0
-    # current_train_acc = 0
-    # while not(current_train_acc > previous_train_acc and previous_test_acc > current_test_acc + 5.0):
-        # previous_train_acc = current_train_acc
-        # previous_test_acc = current_test_acc
-    for i in range(args.num_epoch):
-        _, current_train_acc = train(epoch, step, net, train_loader, data_size, optimizer, scheduler, criterion, device)
-        current_test_acc = test(epoch, net, val_data, val_loader, criterion, device, best_acc,
-                            unlabeled_mask, curr_query, args.save_name, wandb.run.name, save=args.save)
+    
+    # Initialize optimizer and scheduler
+    optimizer, scheduler = init_optimizer_scheduler(net, args.lr, args.schedule, args.inum_epoch, train_loader)
+
+    if args.no_al and args.schedule == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.inum_epoch)
+
+    # Pre-train on the initial subset
+    for i in range(args.inum_epoch):
+        curr_train_loss, curr_train_acc = train(epoch, round_step, net, train_loader, data_size, optimizer, scheduler, criterion, device, i==args.inum_epoch-1, curr_query, args.no_al)
+        curr_test_acc, curr_wg = test(epoch, net, val_data, val_loader, grouper, criterion, device, best_acc,
+                            unlabeled_mask, i==args.inum_epoch-1, curr_query, args.save_name, wandb.run.name, save=args.save)
+        if args.no_al:
+            scheduler.step()
         epoch += 1
-        step += len(train_loader)
-        
+        round_step += len(train_loader)
 
     # Start the query loop 
     for query in range(args.num_queries):
         #print(query_start_epoch)
         #query_start_epoch[query + 1] = epoch
         curr_query += 1
+        round_step = 0
 
         # Query the oracle for more labels
-        group_counts = query_the_oracle(unlabeled_mask, net, device, train_val_data, grouper, query_size=args.query_size, 
+        idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, grouper, query_size=args.query_size, 
                         query_strategy=args.query_strategy, pool_size=0, batch_size=args.batch_size)
-        group_counts = np.array(group_counts)
-        query_info = dict()
-        for i in range(len(group_counts)):
-            query_info[grouper.group_str(i)] = 100.0 * group_counts[i]/np.sum(group_counts)
-            print("group: {}, count: {} \n".format(grouper.group_str(i), group_counts[i]))
-        wandb.log(query_info)
+        print_log_selection_info(idx, train_val_data, grouper, curr_query, "selection_per_query")
 
+        # If passed args.new_model, train a new model in each query round
         if args.new_model: 
             net = torchvision.models.resnet50(num_classes = num_classes)
             net = net.to(device)
@@ -206,29 +200,49 @@ def main():
                 net = torch.nn.DataParallel(net)
                 cudnn.benchmark = True
 
-        # Train the model on the data that has been labeled so far:
+        # Prepare train loader
         labeled_idx = np.where(unlabeled_mask == 0)[0]
+        print_log_selection_info(labeled_idx, train_val_data, grouper, curr_query, "selection_accumulating")
+        data_size = np.sum(unlabeled_mask == 0)
         train_loader = get_train_loader("standard", WILDSSubset(train_data, labeled_idx, transform=None), 
                                         batch_size=args.batch_size, num_workers=2)
-        data_size = np.sum(unlabeled_mask == 0)
-        # previous_test_acc = 0
-        # current_test_acc = 1
-        # previous_train_acc = 0
-        # current_train_acc = 0
-        # while not(current_train_acc > previous_train_acc and previous_test_acc > current_test_acc + 5.0):
-        #     previous_train_acc = current_train_acc
-        #     previous_test_acc = current_test_acc
+
+        # Reinitialize optimizer and scheduler
+        optimizer, scheduler = init_optimizer_scheduler(net, args.lr, args.schedule, args.num_epoch, train_loader)
+
+        # Train the model on the data that has been labeled so far:
         for i in range(args.num_epoch):
-            _, current_train_acc = train(epoch, step, net, train_loader, data_size, optimizer, scheduler, criterion, device)
-            current_test_acc = test(epoch, net, val_data, val_loader, criterion, device, best_acc,
-                            unlabeled_mask, curr_query, args.save_name, wandb.run.name, save=args.save)
+            _, curr_train_acc = train(epoch, round_step, net, train_loader, data_size, optimizer, scheduler, criterion, device, i==args.num_epoch-1, curr_query, args.no_al)
+            curr_test_acc, curr_wg = test(epoch, net, val_data, val_loader, grouper, criterion, device, best_acc,
+                            unlabeled_mask, i==args.num_epoch-1, curr_query, args.save_name, wandb.run.name, save=args.save)
             epoch += 1
-            step += len(train_loader)
+            round_step += len(train_loader)
 
 
+def init_optimizer_scheduler(net, lr, schedule, num_epoch, train_loader):
+    optimizer = optim.SGD(net.parameters(), lr=lr,
+                momentum=0.9, weight_decay=1e-4)
+    if schedule == "constant":
+        lambda_cons = lambda epoch: 1
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda_cons, last_epoch=-1, verbose=False)
+    elif schedule == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epoch*len(train_loader))
+    return optimizer, scheduler
+
+
+def print_log_selection_info(idx, dataset, grouper, curr_query, wandb_name):
+    selected = WILDSSubset(dataset, idx, transform=None)
+    meta_array = selected.metadata_array
+    group, group_counts = grouper.metadata_to_group(meta_array, return_counts=True)
+    group_counts = np.array(group_counts)
+    query_info = dict()
+    for i in range(len(group_counts)):
+        query_info["{}/{}".format(wandb_name, grouper.group_str(i))] = 100.0 * group_counts[i]/np.sum(group_counts)
+        print("{}, group: {}, count: {} \n".format(wandb_name, grouper.group_str(i), group_counts[i]))
+    wandb.log(dict(**query_info, **{"general/curr_query":curr_query}))
 
 # Training
-def train(epoch, step, net, dataloader, data_size, optimizer, scheduler, criterion, device):
+def train(epoch, step, net, dataloader, data_size, optimizer, scheduler, criterion, device, query_end, curr_query, no_al):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
@@ -246,9 +260,10 @@ def train(epoch, step, net, dataloader, data_size, optimizer, scheduler, criteri
         loss = criterion(outputs, targets)
         loss.backward()
         lr = scheduler.get_last_lr()[0]
-        wandb.log({"step_loss":loss.item(), "lr": lr})
+        wandb.log({"train/train_step_loss":loss.item(), "train/lr": lr})
         optimizer.step()
-        scheduler.step()
+        if not no_al:
+            scheduler.step()
         train_loss += loss.item()
         _, predicted = outputs.max(1)
         total += targets.size(0)
@@ -257,12 +272,17 @@ def train(epoch, step, net, dataloader, data_size, optimizer, scheduler, criteri
         progress_bar(batch_idx, len(dataloader), 'Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
                      % (lr, train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
-    wandb.log({"epoch": epoch, "data_size": data_size, "batch_loss": train_loss/len(dataloader), "train_acc":100.*correct/total})
+    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total})
+    
+    # if the current epoch is the last of the query round 
+    if query_end:
+        wandb.log({"general/epoch": epoch, "general/data_size": data_size, "general/curr_query": curr_query,
+                "train_per_query/query_end_train_loss": train_loss/len(dataloader), "train_per_query/query_end_train_acc":100.*correct/total})
     
     return train_loss/len(dataloader), 100.*correct/total
 
-def test(epoch, net, dataset, dataloader, criterion, device, best_acc, 
-        unlabeled_mask, curr_query, save_name, run_name, save=True):
+def test(epoch, net, dataset, dataloader, grouper, criterion, device, best_acc, 
+        unlabeled_mask, query_end, curr_query, save_name, run_name, save=True):
     net.eval()
     test_loss = 0
     correct = 0
@@ -290,17 +310,30 @@ def test(epoch, net, dataset, dataloader, criterion, device, best_acc,
     results, result_str = dataset.eval(predictions.cpu(), y_array, meta_array)
     print(result_str)
 
-    wandb.log({"epoch": epoch, "curr_query": curr_query, "test_acc": 100.*correct/total,
-    "adj_acc":results['adj_acc_avg'],
-    "landbird_land_acc":results['acc_y:landbird_background:land'], 
-    "landbird_water_acc":results['acc_y:landbird_background:water'],
-    "waterbird_land_acc":results['acc_y:waterbird_background:land'],
-    "waterbird_water_acc":results['acc_y:waterbird_background:water'],
-    "wg_acc":results['acc_wg']
-    })
+    worst_group = get_worst_group(dataset, grouper, predictions)
+
+    wandb.log({"general/epoch": epoch, "general/curr_query": curr_query, "val/test_acc": 100.*correct/total,
+                "val/adj_acc":results['adj_acc_avg'],
+                "val/landbird_land_acc":results['acc_y:landbird_background:land'], 
+                "val/landbird_water_acc":results['acc_y:landbird_background:water'],
+                "val/waterbird_land_acc":results['acc_y:waterbird_background:land'],
+                "val/waterbird_water_acc":results['acc_y:waterbird_background:water'],
+                "val/wg_acc":results['acc_wg']
+                })
+
+    # if the current epoch is the last of the query round
+    if query_end:
+       wandb.log({"general/epoch": epoch, "general/curr_query": curr_query, "val_per_query/query_end_test_acc": 100.*correct/total,
+                "val_per_query/query_end_adj_acc":results['adj_acc_avg'],
+                "val_per_query/query_end_landbird_land_acc":results['acc_y:landbird_background:land'], 
+                "val_per_query/query_end_landbird_water_acc":results['acc_y:landbird_background:water'],
+                "val_per_query/query_end_waterbird_land_acc":results['acc_y:waterbird_background:land'],
+                "val_per_query/query_end_waterbird_water_acc":results['acc_y:waterbird_background:water'],
+                "val_per_query/query_end_wg_acc":results['acc_wg']
+                })
 
     # Save checkpoint.
-    acc = 100.*correct/total
+    acc = results['adj_acc_avg']
     if acc > best_acc and save:
         print('Saving..')
         state = {
@@ -315,7 +348,26 @@ def test(epoch, net, dataset, dataloader, criterion, device, best_acc,
         torch.save(state, f'./checkpoint/{save_name}_{run_name}.pth')
         best_acc = acc
 
-    return 100.*correct/total
+    return 100.*correct/total, worst_group
+
+def get_worst_group(dataset, grouper, predictions):
+    predictions = np.array(predictions.cpu())
+    y_array = np.array(dataset.y_array.cpu())
+    meta_array = dataset.metadata_array.cpu()
+    group, group_counts = grouper.metadata_to_group(meta_array, return_counts=True)
+    group = np.array(group)
+    group_counts = np.array(group_counts)
+    acc = np.zeros(len(group_counts))
+    for i in range(len(group_counts)):
+        group_idx = np.nonzero(group == i)[0]
+        acc[i] = np.sum(y_array[group_idx] == predictions[group_idx])/group_counts[i]
+    worst_group = np.argmin(acc)
+    wg_acc = acc[worst_group]
+    #print("Worst group is {}: {} with acc {}".format(worst_group, grouper.group_str(worst_group), wg_acc))
+    return worst_group
+
+
+ 
 
 
 

@@ -132,24 +132,19 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, grouper, query_size
     else:
         # 'random'
         if pool_size > 0:
-            sample_idx = random.sample(pool_idx, query_size)
+            sample_idx = random.sample(range(1, len(pool_idx)), query_size)
         else:
             sample_idx = random.sample(range(1, len(unlabeled_idx)), query_size)
-
-    #print the group information of selected datapoints
-    selected = WILDSSubset(dataset, unlabeled_idx[sample_idx], transform=None)
-    meta_array = selected.metadata_array
-    group, group_counts = grouper.metadata_to_group(meta_array, return_counts=True)
-    # for i in range(len(group_counts)):
-    #     print("group: {}, count: {} \n".format(grouper.group_str(i), group_counts[i]))
-        
+    
     # update the unlabeled mask, change sign from 1 to 0 for newly queried samples
     if pool_size > 0:
-        unlabeled_mask[unlabeled_idx[pool_idx][sample_idx]] = 0
+        selected_idx = unlabeled_idx[pool_idx][sample_idx]
     else:
-        unlabeled_mask[unlabeled_idx[sample_idx]] = 0
+        selected_idx = unlabeled_idx[sample_idx] 
     
-    return group_counts
+    unlabeled_mask[selected_idx] = 0
+    
+    return selected_idx
     
 
 
