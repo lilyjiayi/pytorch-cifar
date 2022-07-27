@@ -111,8 +111,8 @@ def find_avg_c_group(model, device, data_loader, dataset, grouper):
       group_avg_c[i] = np.mean(confidences[np.nonzero(group == i)[0]])
     worst_group = np.argmin(group_avg_c)
     wg_avg_c = group_avg_c[worst_group]
-    print(wg_avg_c)
-    print("Worst group is {}: {} with average confidence score {}".format(worst_group, grouper.group_str(worst_group), wg_avg_c))
+    # print(wg_avg_c)
+    # print("Worst group is {}: {} with average confidence score {}".format(worst_group, grouper.group_str(worst_group), wg_avg_c))
     return worst_group
 
 
@@ -153,8 +153,8 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, grouper, query_size
     num_group = len(group_counts)
     group_idx = np.arange(len(dataset))
 
-    if group_strategy == "oracle":
-      assert wg != None and wg in range(num_group), "For group strategy = oracle, a valid worst group is needed"
+    if group_strategy == "oracle" or group_strategy == "avg_c_val":
+      assert wg != None and wg in range(num_group), "For group strategy = oracle or avg_c_val, a valid worst group is needed"
     elif group_strategy == "avg_c":
       data_loader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=num_workers)
       wg = find_avg_c_group(model, device, data_loader, dataset, grouper)
