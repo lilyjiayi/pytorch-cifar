@@ -3,7 +3,9 @@
 Different Active Learning methods on celebA and waterbirds
 
 ## Prerequisites
+#conda env created in the public conda directory
 
+conda activate jiayili_al
 
 ## Training
 ```
