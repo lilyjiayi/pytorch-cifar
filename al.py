@@ -184,13 +184,23 @@ def main():
         checkpoint = torch.load(args.checkpoint)
         net.load_state_dict(checkpoint['net'])
         best_acc = checkpoint['acc']
-        epoch = checkpoint['epoch'] + 1
+        epoch = checkpoint['epoch'] 
         unlabeled_mask = checkpoint['unlabeled_mask']
         curr_query = checkpoint['curr_query']
         train_idx = checkpoint['train_idx']
         curr_wg = checkpoint['curr_wg']
         print("Finish Loading model with accuracy {}, achieved from epoch {}, query {}, number of labeled samples {}".format(
             best_acc, epoch, curr_query, np.sum(unlabeled_mask == 0)))
+
+        #evaluate and log
+        curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
+                                                   device, best_acc, args.group_strategy,
+                                                   unlabeled_mask, train_idx, True, curr_query)
+        if args.group_strategy == 'min':
+            curr_wg = np.argmin(group_counts)
+            #print("Group strategy is min, the smallest group is {}".format(grouper.group_str(curr_wg)))
+        elif args.group_strategy == 'avg_c_val':
+            curr_wg = get_avgc_worst_group(confidences, grouper, val_data)
     else:
         # Initialize counters
         round_step = 0 #keeps track of number of steps for this query round, not really used
@@ -227,19 +237,14 @@ def main():
             query_end = (i==args.inum_epoch-1)
             curr_train_loss, curr_train_acc = train(epoch, round_step, net, train_loader, args.batch_size, data_size, 
                                                     optimizer, scheduler, criterion, device, query_end, curr_query, args.no_al)
-            # curr_test_acc, curr_wg = test(epoch, net, val_data, val_loader, grouper, criterion, 
-            #                               device, best_acc, args.group_strategy,
-            #                               unlabeled_mask, train_idx, query_end, curr_query,  
-            #                               args.save_name, wandb.run.name, save=args.save)
+            curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
+                                                   device, best_acc, args.group_strategy,
+                                                   unlabeled_mask, train_idx, query_end, curr_query)
             # if args.no_al:
             #     scheduler.step()
             epoch += 1
             round_step += len(train_loader)
         
-        # To speed up training, only evaluate at the end of query 
-        curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
-                                                   device, best_acc, args.group_strategy,
-                                                   unlabeled_mask, train_idx, True, curr_query)
         # by default, curr_wg is the worst performing group on the val set
         if args.group_strategy == 'min':
             curr_wg = np.argmin(group_counts)
@@ -299,6 +304,7 @@ def main():
             epoch += 1
             round_step += len(train_loader)
         
+        # To speed up training, only evaluate at the end of query 
         curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
                                                    device, best_acc, args.group_strategy,
                                                    unlabeled_mask, train_idx, True, curr_query)
@@ -456,7 +462,7 @@ def save_checkpoint(save, condition, net, acc, epoch, curr_query, unlabeled_mask
         torch.save(state, f'./checkpoint/{save_name}_{run_name}/{curr_query}.pth')
 
 def get_avgc_worst_group(confidences, grouper, dataset):
-    start_time = time.time()
+    #start_time = time.time()
     confidences = np.asarray(confidences.cpu())
     print(f'Val set is of size {len(dataset)}')
     group, group_counts = grouper.metadata_to_group(dataset.metadata_array, return_counts=True)
