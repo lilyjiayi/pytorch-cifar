@@ -1,35 +1,27 @@
-# Train CIFAR10 with PyTorch
+# group AL
 
-I'm playing with [PyTorch](http://pytorch.org/) on the CIFAR10 dataset.
+Different Active Learning methods on celebA and waterbirds
 
 ## Prerequisites
-- Python 3.6+
-- PyTorch 1.0+
+
 
 ## Training
 ```
-# Start training with: 
-python main.py
+# normal 
+python al.py --dataset celebA --model resnet18 --drop_last --inum_epoch 100 --num_epoch 10 --batch_size 128 --ilr 1e-4 --lr 1e-5 --ischedule cosine  --schedule cosine --num_workers 8 --query_strategy least_confidence --seed_size 10000 --num_queries 300 --query_size 500 --wandb_group celebA_10k_500_iep100_normal --save
 
-# You can manually resume the training with: 
-python main.py --resume --lr=0.01
+# random
+python al.py --dataset celebA --model resnet18 --drop_last --inum_epoch 100 --num_epoch 10 --batch_size 128 --ilr 1e-4 --lr 1e-5 --ischedule cosine  --schedule cosine --num_workers 8 --query_strategy random --seed_size 10000 --num_queries 300 --query_size 500 --wandb_group celebA_10k_500_iep100_random --save
+
+# oracle 
+python al.py --dataset celebA --model resnet18 --drop_last --inum_epoch 100 --num_epoch 10 --batch_size 128 --ilr 1e-4 --lr 1e-5 --ischedule cosine  --schedule cosine --num_workers 8 --group_strategy oracle --query_strategy random --seed_size 10000 --num_queries 300 --query_size 500 --wandb_group celebA_10k_500_iep100_oracle --save
+
+# avg_c  
+python al.py --dataset celebA --model resnet18 --drop_last --inum_epoch 100 --num_epoch 10 --batch_size 128 --ilr 1e-4 --lr 1e-5 --ischedule cosine  --schedule cosine --num_workers 8 --group_strategy avg_c_val --query_strategy random --seed_size 10000 --num_queries 300 --query_size 500 --wandb_group celebA_10k_500_iep100_avgc --save
+
+# min
+python al.py --dataset celebA --model resnet18 --drop_last --inum_epoch 100 --num_epoch 10 --batch_size 128 --ilr 1e-4 --lr 1e-5 --ischedule cosine  --schedule cosine --num_workers 8 --group_strategy min --query_strategy random --seed_size 10000 --num_queries 300 --query_size 500 --wandb_group celebA_10k_500_iep100_min --save
 ```
 
-## Accuracy
-| Model             | Acc.        |
-| ----------------- | ----------- |
-| [VGG16](https://arxiv.org/abs/1409.1556)              | 92.64%      |
-| [ResNet18](https://arxiv.org/abs/1512.03385)          | 93.02%      |
-| [ResNet50](https://arxiv.org/abs/1512.03385)          | 93.62%      |
-| [ResNet101](https://arxiv.org/abs/1512.03385)         | 93.75%      |
-| [RegNetX_200MF](https://arxiv.org/abs/2003.13678)     | 94.24%      |
-| [RegNetY_400MF](https://arxiv.org/abs/2003.13678)     | 94.29%      |
-| [MobileNetV2](https://arxiv.org/abs/1801.04381)       | 94.43%      |
-| [ResNeXt29(32x4d)](https://arxiv.org/abs/1611.05431)  | 94.73%      |
-| [ResNeXt29(2x64d)](https://arxiv.org/abs/1611.05431)  | 94.82%      |
-| [SimpleDLA](https://arxiv.org/abs/1707.064)           | 94.89%      |
-| [DenseNet121](https://arxiv.org/abs/1608.06993)       | 95.04%      |
-| [PreActResNet18](https://arxiv.org/abs/1603.05027)    | 95.11%      |
-| [DPN92](https://arxiv.org/abs/1707.01629)             | 95.16%      |
-| [DLA](https://arxiv.org/pdf/1707.06484.pdf)           | 95.47%      |
+
 
