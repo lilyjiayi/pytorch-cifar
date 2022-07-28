@@ -38,7 +38,7 @@ def main():
     parser.add_argument('--batch_size', default=128, type=int, help='batch size')
     parser.add_argument('--inum_epoch', default=3, type=int, help='number of epochs to train for initial training')
     parser.add_argument('--num_epoch', default=3, type=int, help='number of epochs to train for each query round')
-    parser.add_argument('--ischedule', default="cosine", type=str) # 'constant', 'cosine'
+    parser.add_argument('--ischedule', default="cosine", type=str) # 'constant', 'cosine', 'find_lr'
     parser.add_argument('--schedule', default="cosine", type=str) # 'constant', 'cosine'
     parser.add_argument('--drop_last', '-d', action='store_true',
                         help='drop last batch')
@@ -94,6 +94,7 @@ def main():
     #print(dataset.metadata_map)
     if args.dataset == 'celebA':
         grouper = CombinatorialGrouper(dataset, dataset.metadata_fields[:-2])
+        full_grouper = CombinatorialGrouper(dataset, dataset.metadata_fields[:-1])
     else:
         grouper = CombinatorialGrouper(dataset, dataset.metadata_fields[:-1])
 
@@ -193,9 +194,12 @@ def main():
             best_acc, epoch, curr_query, np.sum(unlabeled_mask == 0)))
 
         #evaluate and log
-        curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
+        curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, full_grouper, criterion, 
                                                    device, best_acc, args.group_strategy,
                                                    unlabeled_mask, train_idx, True, curr_query)
+
+        group_counts = print_log_selection_info(train_idx, train_val_data, grouper, curr_query, "selection_accumulating")
+        print_log_selection_info(train_idx, train_val_data, full_grouper, curr_query, "selection_accumulating")      
         if args.group_strategy == 'min':
             curr_wg = np.argmin(group_counts)
             #print("Group strategy is min, the smallest group is {}".format(grouper.group_str(curr_wg)))
@@ -218,10 +222,12 @@ def main():
                             group_strategy=None, wg=curr_wg, query_strategy='random', 
                             replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
             print_log_selection_info(idx, train_val_data, grouper, curr_query, "selection_per_query")
+            print_log_selection_info(idx, train_val_data, full_grouper, curr_query, "selection_per_query")
             train_idx = idx
 
         # Prepare train loader
         group_counts = print_log_selection_info(train_idx, train_val_data, grouper, curr_query, "selection_accumulating")
+        print_log_selection_info(train_idx, train_val_data, full_grouper, curr_query, "selection_accumulating")
         data_size = np.sum(unlabeled_mask == 0) #keeps track of number of distinct labeled datapoints
         train_loader = get_train_loader("standard", WILDSSubset(train_data, train_idx, transform=None), 
                                         batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last)
@@ -237,7 +243,7 @@ def main():
             query_end = (i==args.inum_epoch-1)
             curr_train_loss, curr_train_acc = train(epoch, round_step, net, train_loader, args.batch_size, data_size, 
                                                     optimizer, scheduler, criterion, device, query_end, curr_query, args.no_al)
-            curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
+            curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, full_grouper, criterion, 
                                                    device, best_acc, args.group_strategy,
                                                    unlabeled_mask, train_idx, query_end, curr_query)
             # if args.no_al:
@@ -267,6 +273,7 @@ def main():
                                group_strategy=args.group_strategy, wg=curr_wg, query_strategy=args.query_strategy, 
                                replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
         print_log_selection_info(idx, train_val_data, grouper, curr_query, "selection_per_query")
+        print_log_selection_info(idx, train_val_data, full_grouper, curr_query, "selection_per_query")
         train_idx = np.append(train_idx, idx)
 
         # If passed args.new_model, train a new model in each query round
@@ -282,6 +289,7 @@ def main():
 
         # Prepare train loader
         group_counts = print_log_selection_info(train_idx, train_val_data, grouper, curr_query, "selection_accumulating")
+        print_log_selection_info(train_idx, train_val_data, full_grouper, curr_query, "selection_accumulating")
         data_size = np.sum(unlabeled_mask == 0)
         train_loader = get_train_loader("standard", WILDSSubset(train_data, train_idx, transform=None), 
                                         batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last)
@@ -297,7 +305,7 @@ def main():
             query_end = (i==args.num_epoch-1)
             _, curr_train_acc = train(epoch, round_step, net, train_loader, args.batch_size, data_size, 
                                       optimizer, scheduler, criterion, device, query_end, curr_query, args.no_al)
-            # curr_test_acc, curr_wg = test(epoch, net, val_data, val_loader, grouper, criterion, 
+            # curr_test_acc, curr_wg = test(epoch, net, val_data, val_loader, grouper, full_grouper, criterion, 
             #                               device, best_acc, args.group_strategy,
             #                               unlabeled_mask, train_idx, query_end, curr_query, 
             #                               args.save_name, wandb.run.name, save=args.save)
@@ -305,7 +313,7 @@ def main():
             round_step += len(train_loader)
         
         # To speed up training, only evaluate at the end of query 
-        curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, criterion, 
+        curr_test_acc, curr_wg, confidences = test(epoch, net, val_data, val_loader, grouper, full_grouper, criterion, 
                                                    device, best_acc, args.group_strategy,
                                                    unlabeled_mask, train_idx, True, curr_query)
 
@@ -325,6 +333,9 @@ def init_optimizer_scheduler(net, lr, schedule, num_epoch, train_loader, wd):
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda_cons, last_epoch=-1, verbose=False)
     elif schedule == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epoch*len(train_loader))
+    elif schedule == "find_lr":
+        lambda_cons = lambda epoch: 1.05**epoch
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda_cons, last_epoch=-1, verbose=False)
     return optimizer, scheduler
 
 def print_log_selection_info(idx, dataset, grouper, curr_query, wandb_name):
@@ -384,7 +395,7 @@ def train(epoch, step, net, dataloader, batch_size, data_size, optimizer, schedu
 
 
 # Test
-def test(epoch, net, dataset, dataloader, grouper, criterion, device, best_acc, group_strategy,
+def test(epoch, net, dataset, dataloader, grouper, full_grouper, criterion, device, best_acc, group_strategy,
         unlabeled_mask, train_idx, query_end, curr_query):
     net.eval()
     test_loss = 0
@@ -422,7 +433,10 @@ def test(epoch, net, dataset, dataloader, grouper, criterion, device, best_acc, 
             progress_bar(batch_idx, len(dataloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                          % (test_loss/num_samples, 100.*correct/total, correct, total))
 
-    worst_group, results = get_worst_group(dataset, grouper, predictions) #oracle worst group
+    _, results_full = get_worst_group(dataset, full_grouper, predictions, prefix = 'full') 
+    worst_group, results = get_worst_group(dataset, grouper, predictions, prefix = '') #oracle worst group
+
+    results.update(results_full)
 
     if dataset.dataset_name == 'waterbirds':
         y_array = dataset.y_array.cpu()
@@ -479,7 +493,7 @@ def get_avgc_worst_group(confidences, grouper, dataset):
     return worst_group
 
 # output worst performing group and group-wise metrics(for wandb log)
-def get_worst_group(dataset, grouper, predictions):
+def get_worst_group(dataset, grouper, predictions, prefix = ''):
     predictions = np.array(predictions.cpu())
     y_array = np.array(dataset.y_array.cpu())
     meta_array = dataset.metadata_array.cpu()
@@ -494,7 +508,7 @@ def get_worst_group(dataset, grouper, predictions):
         results.update({grouper.group_str(i):acc[i]})
     worst_group = np.argmin(acc)
     wg_acc = acc[worst_group]
-    results.update({"wg_acc": wg_acc, 'wg': worst_group, 'mean_acc': np.mean(acc)})
+    results.update({f"{prefix}_wg_acc": wg_acc, f'{prefix}_wg': worst_group, f'{prefix}_mean_acc': np.mean(acc)})
     #print("Worst group is {}: {} with acc {}".format(worst_group, grouper.group_str(worst_group), wg_acc))
     return worst_group, results
 
