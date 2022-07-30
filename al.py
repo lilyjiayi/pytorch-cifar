@@ -103,6 +103,8 @@ def main():
     target_resolution = (224, 224)
 
     train_transform = transforms.Compose([
+        # let's just use default params? https://pytorch.org/vision/main/generated/torchvision.transforms.RandomResizedCrop.html
+        # also why does the first scale parameter look so different from the default
         transforms.RandomResizedCrop(
             target_resolution,
             scale=(0.7, 1.0),
@@ -113,6 +115,9 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     eval_transform = transforms.Compose([
+        # note that providing both h and w will change the aspect ratio of the image
+        # look here for docs: https://pytorch.org/vision/main/generated/torchvision.transforms.Resize.html
+        # we can probably just pass 1 parameter to lett Resize preserve aspect ratio 
         transforms.Resize((int(target_resolution[0]*scale), int(target_resolution[1]*scale))),
         transforms.CenterCrop(target_resolution),
         transforms.ToTensor(),
@@ -173,6 +178,7 @@ def main():
 
     net = net.to(device)
     if device == 'cuda':
+        # is there a perf hit for using DataParallel on 1 gpu?
         net = torch.nn.DataParallel(net)
         cudnn.benchmark = True
     
@@ -324,6 +330,12 @@ def main():
             curr_wg = get_avgc_worst_group(confidences, grouper, val_data)
         save_checkpoint(args.save, curr_query % args.save_every == 0, net, curr_test_acc, epoch,
                         curr_query, unlabeled_mask, train_idx, curr_wg, args.save_name, wandb.run.name)
+
+
+        # in general we have a few places here where we write the same code pattern:
+        # update the training set via querying oracle, inititalize and train model, and test it
+        # we can probably consolidate it into a separate method or restructure to make it cleaner
+
 
 def init_optimizer_scheduler(net, lr, schedule, num_epoch, train_loader, wd):
     optimizer = optim.SGD(net.parameters(), lr=lr,
