@@ -190,6 +190,8 @@ def main():
     target_resolution = (224, 224)
 
     train_transform = transforms.Compose([
+        # let's just use default params? https://pytorch.org/vision/main/generated/torchvision.transforms.RandomResizedCrop.html
+        # also why does the first scale parameter look so different from the default
         transforms.RandomResizedCrop(
             target_resolution,
             scale=(0.7, 1.0),
@@ -200,6 +202,9 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     eval_transform = transforms.Compose([
+        # note that providing both h and w will change the aspect ratio of the image
+        # look here for docs: https://pytorch.org/vision/main/generated/torchvision.transforms.Resize.html
+        # we can probably just pass 1 parameter to lett Resize preserve aspect ratio 
         transforms.Resize((int(target_resolution[0]*scale), int(target_resolution[1]*scale))),
         #transforms.Resize(int(target_resolution[0]*scale)),
         transforms.CenterCrop(target_resolution),
@@ -272,6 +277,7 @@ def main():
 
     net = net.to(device)
     if device == 'cuda':
+        # is there a perf hit for using DataParallel on 1 gpu?
         net = torch.nn.DataParallel(net)
         cudnn.benchmark = True
     

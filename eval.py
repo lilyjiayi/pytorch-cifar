@@ -27,8 +27,8 @@ from cifar import CIFAR10_C
 parser = argparse.ArgumentParser(description='Model Evaluation')
 parser.add_argument('--checkpoint', default="./checkpoint/ckpt.pth", type=str)
 parser.add_argument('--model', default="cf10-densenet", type=str)
-parser.add_argument('--dataset', default="cf10c-gaussian_noise", type=str)
-parser.add_argument('--data_fp', default="/nlp/scr/jiayili/data/CIFAR-10-C/gaussian_noise.npy", type=str)
+parser.add_argument('--dataset', default="cf10c-brightness", type=str)
+parser.add_argument('--data_fp', default="/nlp/scr/jiayili/data/CIFAR-10-C/brightness.npy", type=str)
 parser.add_argument('--labels_fp', default="/nlp/scr/jiayili/data/CIFAR-10-C/labels.npy", type=str)
 
 args = parser.parse_args()
