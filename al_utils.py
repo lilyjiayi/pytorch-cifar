@@ -2,7 +2,7 @@ import random
 import os
 import numpy as np
 import calibration as cal
-import ATC as atc
+import ATC as ATC
 from scipy.special import softmax
 import pandas as pd
 
@@ -81,42 +81,72 @@ def calculate_probs(model, device, data_loader):
   return probs
 
 
-def threshold(model, device, pool_data, val_data, query_size, batch_size, num_workers):
-  
+def threshold_query(model, device, pool_loader, val_data, query_size, batch_size, num_workers):
   print("Calculating val probabilities")
   val_loader = DataLoader(val_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
   source_probs = calculate_probs(model, device, val_loader).cpu().numpy()
   #print(f"Size of source_probs is {source_probs.size}")
   source_labels = val_data.y_array.cpu().numpy()
   calibration_error = cal.ece_loss(source_probs, source_labels)
-  #print("Calibration error is {}".format(calibration_error))
+  print("Calibration error is {}".format(calibration_error))
   calibrator = cal.TempScaling(bias=False)
   calibrator.fit(source_probs, source_labels)
   calibrated_source_probs = calibrator.calibrate(source_probs)
 
   print("Calculating selection pool probabilities")
-  pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
   test_probs = calculate_probs(model, device, pool_loader).cpu().numpy()
   #print(f"Size of test_probs is {test_probs.size}")
   calibrated_test_probs = calibrator.calibrate(test_probs)
-  atc_acc, threshold = atc.ATC_accuracy(calibrated_source_probs, source_labels, calibrated_test_probs)
+  atc_acc, threshold = ATC.ATC_accuracy(calibrated_source_probs, source_labels, calibrated_test_probs)
   print(f"ATC estimated accuracy on selection pool is {atc_acc} and threshold is {threshold}")
   
   scores = np.max(calibrated_test_probs, axis=-1)
   candidate_idx = np.nonzero(scores < threshold)[0]
-  print(f"For testing, candidate_idx [10] has probability {scores[candidate_idx[10]]}")
   sample_idx = random.sample(list(candidate_idx), query_size)
   return sample_idx
 
+def atc(model, device, target_data, source_val_data, grouper, batch_size, num_workers, test_probs = None):
+  print("Calculating source val probabilities")
+  source_loader = DataLoader(source_val_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
+  source_probs = calculate_probs(model, device, source_loader).cpu().numpy()
+  # print(f"Shape of source_probs is {source_probs.shape}")
+  source_labels = source_val_data.y_array.cpu().numpy()
+  calibration_error = cal.ece_loss(source_probs, source_labels)
+  print("Calibration error is {}".format(calibration_error))
+  calibrator = cal.TempScaling(bias=False)
+  calibrator.fit(source_probs, source_labels)
+  calibrated_source_probs = calibrator.calibrate(source_probs)
+
+  if test_probs is None:
+    print("Calculating target probabilities")
+    target_loader = DataLoader(target_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
+    test_probs = calculate_probs(model, device, target_loader)
+  # print(f"Size of test_probs is {test_probs.size}")
+  test_probs = test_probs.cpu().numpy()
+  calibrated_test_probs = calibrator.calibrate(test_probs)
+  atc_acc, threshold = ATC.ATC_accuracy(calibrated_source_probs, source_labels, calibrated_test_probs)
+  # print(f"ATC estimated accuracy on target data is {atc_acc} and threshold is {threshold}")
+  
+  scores = np.max(calibrated_test_probs, axis=-1)
+  group, group_count = grouper.metadata_to_group(target_data.metadata_array, return_counts=True)
+  group = group.cpu().numpy()
+  group_count = group_count.cpu().numpy()
+  atc_groups = np.zeros(group_count.size)
+  # print(f"scores shape is {scores.shape}")
+  # print(f"group shape is {group.shape}")
+  for g in range(group_count.size):
+    group_idx = np.nonzero(group == g)[0]
+    correct = np.nonzero(scores[group_idx] >= threshold)[0]
+    atc_groups[g] = correct.size / group_count[g]
+  # print(f"ATC estimated accuracy on target groups are {atc_groups}")
+  return atc_acc, atc_groups, threshold
 
 def margin_query(model, device, data_loader, query_size=10):
     
     margins = []
-    model.eval()
-    
+    model.eval() 
     with torch.no_grad():
-        for batch in data_loader:
-        
+        for batch in data_loader:      
             data, _, _ = batch
             logits = model(data.to(device))
             probabilities = F.softmax(logits, dim=1)
@@ -135,8 +165,7 @@ def margin_query(model, device, data_loader, query_size=10):
 
 def find_avg_c_group(model, device, data_loader, dataset, grouper):
     confidences = []
-    model.eval()
-    
+    model.eval() 
     with torch.no_grad():
         for batch_idx, batch in enumerate(data_loader):
             data, _, _ = batch
@@ -162,6 +191,32 @@ def find_avg_c_group(model, device, data_loader, dataset, grouper):
     # print("Worst group is {}: {} with average confidence score {}".format(worst_group, grouper.group_str(worst_group), wg_avg_c))
     return worst_group
 
+def sample_from_distribution(distribution, dataset, unlabeled_mask, query_size, grouper):
+  distribution = np.array(distribution)
+  num_to_sample = distribution * query_size
+  num_to_sample = [round(i) for i in num_to_sample]
+  group, group_count = grouper.metadata_to_group(dataset.metadata_array, return_counts=True)
+  group = group.cpu().numpy()
+  group_count = group_count.cpu().numpy()
+  num_group = group_count.size
+  assert len(num_to_sample) == num_group, f"To sample from distribution, {len(num_to_sample)} groups is given, {num_group} groups are required"
+  selected = np.array([])
+  for g in range(num_group):
+    num_select = num_to_sample[g]
+    group_mask = (group == g)
+    candidate_idx = np.nonzero(group_mask * unlabeled_mask)[0]
+    if candidate_idx.size > num_select:
+      select_idx = np.random.choice(candidate_idx, num_select, replace=False)
+    else:
+      select_idx = candidate_idx
+      num_select -= candidate_idx.size
+      group_idx = np.nonzero(group_mask)[0] 
+      select_idx = np.append(select_idx, np.random.choice(group_idx, num_select, replace=True)) 
+    selected = np.append(selected, select_idx)
+  selected = selected.astype(int)
+  unlabeled_mask[selected] = 0
+  return selected
+
 
 
 '''
@@ -184,10 +239,16 @@ Modifies:
 - dataset: edits the labels of samples that have been queried; updates dataset.unlabeled_mask
 '''
 
-def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, query_size=40, 
-                     group_strategy=None, exclude=None, wg=None, query_strategy='least_confidence', 
+def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, query_size=40,
+                     sample_distribution=None, exclude=None, include=None,
+                     group_strategy=None, wg=None, query_strategy='least_confidence', 
                      replacement=False, pool_size=0, batch_size=8, num_workers=2):
     
+    if sample_distribution is not None:
+      selected_idx = sample_from_distribution(sample_distribution, dataset, unlabeled_mask, query_size, grouper)
+      unlabeled_mask[selected_idx] = 0
+      return selected_idx
+
     if replacement:
       candidate_mask = np.ones(len(unlabeled_mask))
     else:
@@ -199,10 +260,17 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     num_group = len(group_counts)
     
     # exclude some groups 
-    if exclude is not None:
+    mask = np.ones(candidate_mask.size)
+    if include is not None: 
+      mask = np.zeros(candidate_mask.size)
+      for i in include:
+        mask[np.nonzero(group == i)[0]] = 1
+    elif exclude is not None:
       for i in exclude:
-        candidate_mask[np.nonzero(group == i)[0]] = 0
+        mask[np.nonzero(group == i)[0]] = 0
+    candidate_mask = candidate_mask * mask
     
+    # sample according to group_strategy 
     group_idx = np.arange(len(dataset)) #used for creating group_mask, group_mask[group_idx] is set to 1; default is the entire dataset(no group_strategy)
     if group_strategy == "oracle" or group_strategy == "avg_c_val":
       assert wg != None and wg in range(num_group), "For group strategy = oracle or avg_c_val, a valid worst group is needed"
@@ -226,49 +294,35 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
       candidate_mask[selected_idx] = 0
       unlabeled_idx = np.nonzero(candidate_mask)[0]
     
-    #WILDSSubset(train_data, labeled_idx, transform=None)
-    
     # Select a pool of samples to query from
     use_pool = pool_size > 0 and len(unlabeled_idx) > pool_size
     if use_pool:    
-        pool_idx = random.sample(range(0, len(unlabeled_idx)), pool_size)
-        pool_data = Subset(dataset, unlabeled_idx[pool_idx])
-        pool_loader = DataLoader(Subset(dataset, unlabeled_idx[pool_idx]), shuffle = False, batch_size=batch_size, num_workers=num_workers)
+      pool_idx = random.sample(range(0, len(unlabeled_idx)), pool_size)
+      subset_idx = unlabeled_idx[pool_idx]
     else:
-        # rohan: use WildsSubset here to maintain consistency? you also might need the group information for the other AL schemes we experiment with
-        pool_data = Subset(dataset, unlabeled_idx)
-        pool_loader = DataLoader(Subset(dataset, unlabeled_idx), shuffle = False, batch_size=batch_size, num_workers=num_workers)
-
+      subset_idx = unlabeled_idx
+    
+    pool_loader = DataLoader(WILDSSubset(dataset, subset_idx, transform=None), shuffle = False, batch_size=batch_size, num_workers=num_workers)
     print("Querying ...")
     if query_strategy == 'margin':
       sample_idx = margin_query(model, device, pool_loader, query_size)
     elif query_strategy == 'least_confidence':
       sample_idx = least_confidence_query(model, device, pool_loader, query_size)
     elif query_strategy == 'threshold':
-      sample_idx = threshold(model, device, pool_data, val_data, query_size, batch_size, num_workers)
+      sample_idx = threshold_query(model, device, pool_loader, val_data, query_size, batch_size, num_workers)
     else:
-        # 'random'
-        if use_pool:
-            sample_idx = random.sample(range(0, len(pool_idx)), query_size)
-        else:
-            sample_idx = random.sample(range(0, len(unlabeled_idx)), query_size)
+      # 'random'
+      sample_idx = random.sample(range(0, subset_idx.size), query_size)
     
     # update the unlabeled mask, change sign from 1 to 0 for newly queried samples
-    if use_pool:
-        selected = unlabeled_idx[pool_idx][sample_idx]
-    else:
-        selected = unlabeled_idx[sample_idx] 
-    
+    selected = subset_idx[sample_idx]
     if selected_idx is None: 
       selected_idx = selected
     else:
       selected_idx = np.append(selected_idx, selected)
-    
     unlabeled_mask[selected_idx] = 0
     
     return selected_idx
-    
-
 
 
 # From https://github.com/google-research/big_transfer.git bit_hyperrule.py
