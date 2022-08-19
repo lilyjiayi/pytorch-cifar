@@ -256,7 +256,7 @@ def main():
     num_groups = counts.size
     
     # prepare a group_unifrom validation set 
-    val_path = f"./val_data/{args.datasest}_{args.val_size}.csv"
+    val_path = f"./val_data/{args.dataset}_{args.val_size}.csv"
     if os.path.exists(val_path):
         print(f"Validation file exists, loading from {val_path}")
         val_idx = pd.read_csv(val_path, header=None, index_col=False)
