@@ -1,6 +1,6 @@
 # group AL
 
-Different Active Learning methods on celebA and waterbirds
+Active Learning methods on celebA, domainnet, and geo-yfcc
 
 ## For FFCV compatible training
 ```
