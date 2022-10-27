@@ -3,10 +3,10 @@
 Different Active Learning methods on celebA and waterbirds
 
 ## For FFCV compatible training
+```
+conda activate jl_ffcv
 
-#conda activate jl_ffcv
-
-#python ffcv_al.py --dataset geo_yfcc --frac 0.1 \
+python ffcv_al.py --dataset geo_yfcc --frac 0.1 \
  --model resnet18 --pretrain \
  --loader ffcv --num_workers 8 --batch_size 128 --drop_last \
  --iweight_decay 1e-4 --weight_decay 1e-4 \
@@ -14,6 +14,7 @@ Different Active Learning methods on celebA and waterbirds
  --ilr 2e-2 --lr 2e-2  --ischedule cosine  --schedule cosine \
  --seed_size 10000 --pool_size 40000 --query_size 500 --num_queries 30 \
  --group_div standard --query_strategy random \
+```
 
 ## Prerequisites
 #conda env created in the public conda directory
