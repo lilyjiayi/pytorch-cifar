@@ -1,3 +1,8 @@
+# to prevent multiprocess deadlock
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 '''Active learning with PyTorch.'''
 from multiprocessing import AuthenticationError
 from pickle import NONE
@@ -392,7 +397,7 @@ def main():
             if args.uniform:
                 distribution = np.ones(num_groups) / num_groups
             if args.distribution is not None: 
-                raw_prob = distribution.split(',')
+                raw_prob = args.distribution.split(',')
                 distribution = [float(i) for i in raw_prob]
                 distribution = np.array(distribution)
                 assert distribution.size == num_groups, "Distribution needs to have correct number of groups"
@@ -434,8 +439,8 @@ def main():
             query_end = (i==args.inum_epoch-1)
             curr_train_loss, curr_train_acc = train(epoch, round_step, net, train_loader, args.batch_size, data_size, 
                                                     optimizer, scheduler, criterion, device, query_end, curr_query, args.no_al)
-            curr_test_acc, wg, wg_full, wg_label, probabilities, group_accuracies, group_scores, group_losses = test(epoch, net, small_val_data, small_val_loader, grouper, full_grouper, label_grouper, 
-                                                                   args.log_op, criterion_val, device, False, curr_query)
+            # curr_test_acc, wg, wg_full, wg_label, probabilities, group_accuracies, group_scores, group_losses = test(epoch, net, small_val_data, small_val_loader, grouper, full_grouper, label_grouper, 
+            #                                                        args.log_op, criterion_val, device, False, curr_query)
             # if args.no_al:
             #     scheduler.step()
             epoch += 1
@@ -459,23 +464,32 @@ def main():
     _, _, _ = log_selection(val_sample, raw_val_data, 
                             grouper, full_grouper, label_grouper,                                                                        
                             curr_query, None, args.log_op) 
-    atc_acc, atc_groups, _ = atc(net, device, val_data, WILDSSubset(raw_val_data, val_sample, transform=None), 
-                                grouper, args.batch_size, args.num_workers, test_probs=probabilities)       
+    atc_acc, atc_groups, _, atc_prec_recall = atc(net, device, val_data, WILDSSubset(raw_val_data, val_sample, transform=None), 
+                                grouper, args.batch_size, args.num_workers, test_probs=probabilities)     
+
+
     print(f"ATC accuracy predicted from source val data is {atc_acc}")
 
+    print(f"For initial training, group counts are {group_counts}")
     print(f"For initial training, group accuracies are {group_accuracies}")
     print(f"For initial training, atc accuracies are {atc_groups}")
     print(f"For initial training, group scores are {group_scores}")
     print(f"For initial training, group losses are {group_losses}")
+    print(f"For initial training, atc prec and recall are {atc_prec_recall}")
     num_groups = group_accuracies.size
+    count_tb = np.zeros((num_groups+1, num_groups))
     accuracy_tb = np.zeros((num_groups+1, num_groups))
     score_tb = np.zeros((num_groups+1, num_groups))
     loss_tb = np.zeros((num_groups+1, num_groups))
     atc_tb = np.zeros((num_groups+1, num_groups))
+    atc_prec_recall_tb = np.zeros((num_groups+1, 2*num_groups))
+
+    count_tb[0,:] = group_counts
     accuracy_tb[0, :] = group_accuracies
     score_tb[0, :] = group_scores
     loss_tb[0, :] = group_losses
     atc_tb[0, :] = atc_groups
+    atc_prec_recall_tb[0, :] = atc_prec_recall
 
     # Start the query loop 
     for group_idx in range(num_groups):
@@ -562,8 +576,8 @@ def main():
                 query_end = (i==args.num_epoch-1)
                 _, curr_train_acc = train(epoch, round_step, net, train_loader, args.batch_size, data_size, 
                                         optimizer, scheduler, criterion, device, query_end, curr_query, args.no_al)
-                curr_test_acc, wg, wg_full, wg_label, probabilities, group_accuracies, group_scores, group_losses = test(epoch, net, small_val_data, small_val_loader, grouper, full_grouper, label_grouper, 
-                                                                    args.log_op, criterion_val, device, False, curr_query)
+                # curr_test_acc, wg, wg_full, wg_label, probabilities, group_accuracies, group_scores, group_losses = test(epoch, net, small_val_data, small_val_loader, grouper, full_grouper, label_grouper, 
+                #                                                     args.log_op, criterion_val, device, False, curr_query)
                 epoch += 1
                 round_step += len(train_loader)
         
@@ -586,20 +600,25 @@ def main():
         _, _, _ = log_selection(val_sample, raw_val_data, 
                             grouper, full_grouper, label_grouper,                                                                        
                             curr_query, None, args.log_op) 
-        atc_acc, atc_groups, _ = atc(net, device, val_data, WILDSSubset(raw_val_data, val_sample, transform=None), 
+        atc_acc, atc_groups, _, atc_prec_recall = atc(net, device, val_data, WILDSSubset(raw_val_data, val_sample, transform=None), 
                                 grouper, args.batch_size, args.num_workers, test_probs=probabilities)       
         print(f"ATC accuracy predicted from source val data is {atc_acc}")
         
+        print(f"For training with group {group_idx} added, group counts are {group_counts}")
         print(f"For training with group {group_idx} added, group accuracies are {group_accuracies}")
         print(f"For training with group {group_idx} added, atc accuracies are {atc_groups}")
         print(f"For training with group {group_idx} added, group scores are {group_scores}")
         print(f"For training with group {group_idx} added, group losses are {group_losses}")
+        print(f"For training with group {group_idx} added, atc prec and recall are {atc_prec_recall}")
+        count_tb[group_idx+1,:] = group_counts
         accuracy_tb[group_idx+1, :] = group_accuracies
         score_tb[group_idx+1, :] = group_scores
         loss_tb[group_idx+1, :] = group_losses
         atc_tb[group_idx+1, :] = atc_groups
+        atc_prec_recall_tb[group_idx+1, :] = atc_prec_recall
 
-        
+    print("Group counts table")
+    print(count_tb)  
     print("Group accuracies table")
     print(accuracy_tb)
     print("ATC accuracies table")
@@ -608,6 +627,8 @@ def main():
     print(score_tb)
     print("Group losses table")
     print(loss_tb)
+    print("ATC precision and recall table")
+    print(atc_prec_recall_tb)
 
     if not os.path.isdir(f'./transfer_result/{args.wandb_group}/{name}'):
         os.mkdir(f'./transfer_result/{args.wandb_group}/{name}')
@@ -615,6 +636,8 @@ def main():
     pd.DataFrame(atc_tb).to_csv(f"./transfer_result/{args.wandb_group}/{name}/atc.csv", header=False, index=False)
     pd.DataFrame(score_tb).to_csv(f"./transfer_result/{args.wandb_group}/{name}/score.csv", header=False, index=False)
     pd.DataFrame(loss_tb).to_csv(f"./transfer_result/{args.wandb_group}/{name}/loss.csv", header=False, index=False)
+    pd.DataFrame(count_tb).to_csv(f"./transfer_result/{args.wandb_group}/{name}/count.csv", header=False, index=False)
+    pd.DataFrame(atc_prec_recall_tb).to_csv(f"./transfer_result/{args.wandb_group}/{name}/atc_prec_recall.csv", header=False, index=False)
 
 def find_target_group(group_strategy, group_div, probabilities, val_data,
                       wg, wg_full, wg_label, 
