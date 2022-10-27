@@ -14,9 +14,7 @@ val_write_path = f'/nlp/scr-sync/nlp/geo_yfcc_ffcv/one_label_val.beton'
 # write_path = '/juice2/u/nlp/data/geo_yfcc/one_label_test.beton'
 
 train_data = my_dataset.get_subset("train")
-train_data = WILDSSubset(train_data, range(47800,577364), transform=None)
 val_data = my_dataset.get_subset("val")
-# val_data = WILDSSubset(val_data, range(22000,144362), transform=None)
 
 # Pass a type for each data field
 train_writer = DatasetWriter(train_write_path, {
