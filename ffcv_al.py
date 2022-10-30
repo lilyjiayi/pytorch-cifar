@@ -1,7 +1,5 @@
 # to prevent multiprocess deadlock
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
 
 '''Active learning with PyTorch.'''
 import argparse
@@ -114,6 +112,11 @@ def main():
     parser.add_argument('--distribution', default=None, type=str, help='distribution to sample across groups for seed set')
 
     args = parser.parse_args()
+    
+    # if using standard pytorch dataloaders, disable multithreading to prevent deadlocks
+    if args.loader == 'standard':
+        os.environ["OMP_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
 
     # set default drop_last flag to True
     args.drop_last = True
@@ -302,7 +305,7 @@ def main():
     # Prepare data loader
     # By default, dataloaders use pin_memory=True
     if args.loader == 'ffcv':
-        train_loader = ffcv_train_loader(range(500000), pin_memory=pin_memory, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last)
+        train_loader = ffcv_train_loader(pin_memory=pin_memory, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last)
         val_loader = ffcv_val_loader(val_idx, pin_memory=pin_memory, batch_size=args.batch_size, num_workers=args.num_workers)
     else:
         train_loader = get_train_loader("standard", train_data, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last, pin_memory=pin_memory)
@@ -421,7 +424,7 @@ def main():
         data_size = np.sum(unlabeled_mask == 0) #keeps track of number of distinct labeled datapoints
         curr_train_data = WILDSSubset(train_data, train_idx, transform=None)
         if args.loader == 'ffcv':
-            train_loader = ffcv_train_loader(train_idx, pin_memory=pin_memory, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last)
+            train_loader = ffcv_train_loader(pin_memory=pin_memory, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last)
         else:
             train_loader = get_train_loader("standard", curr_train_data, 
                                            batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last, pin_memory=pin_memory)
@@ -547,15 +550,15 @@ def ffcv_train_loader(indices=None, num_workers=8, batch_size=128, drop_last=Tru
     train_image_pipeline = [
         RandomResizedCropRGBImageDecoder(target_resolution, scale=(0.9, 1.0), ratio=(0.75, 1.3333333333333333)),
         RandomHorizontalFlip(),
-        #ToTensor(),
         NormalizeImage(np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225]), np.dtype('float32')),
         ToTensor(),
         ToTorchImage(),
-    ]   
-    train_loader = Loader('/self/scr-sync/nlp/geo_yfcc_ffcv/one_label_train.beton',
+    ]
+
+    train_loader = Loader('/self/scr-sync/nlp/geo_yfcc_ffcv/one_label_all_final.beton',
                         batch_size=batch_size,
                         num_workers=num_workers,
-                        order=OrderOption.QUASI_RANDOM,
+                        order=OrderOption.RANDOM,
                         drop_last=drop_last,
                         indices=indices,
                         os_cache=pin_memory,
