@@ -1,0 +1,174 @@
+from pathlib import Path
+import torch
+import numpy as np
+
+from ffcv.pipeline.operation import Operation
+from ffcv.loader import Loader, OrderOption
+from ffcv.fields.decoders import NDArrayDecoder, FloatDecoder, IntDecoder, RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder
+from ffcv.transforms import ToTensor, ToDevice, ToTorchImage, RandomHorizontalFlip, NormalizeImage, Squeeze
+
+
+train_path = {
+    'geo_yfcc' : '/self/scr-sync/nlp/geo_yfcc_ffcv/one_label_train.beton',
+    'imagenet' : '/self/scr-sync/nlp/imagenet_ffcv/train_512_1.0_90.ffcv',
+    'yfcc_imagenet' : '/nlp/scr-sync/nlp/yfcc_imagenet_ffcv/one_label_all.beton'
+}
+
+val_path = {
+    'geo_yfcc' : '/self/scr-sync/nlp/geo_yfcc_ffcv/one_label_val.beton',
+    'imagenet' : '/self/scr-sync/nlp/imagenet_ffcv/val_512_1.0_90.ffcv',
+    'yfcc_imagenet' : '/nlp/scr-sync/nlp/yfcc_imagenet_ffcv/one_label_all.beton'
+}
+
+
+def ffcv_train_loader(dataset_name, dataset = None, indices=None, num_workers=8, batch_size=128, pin_memory=True, drop_last=True):
+    path = train_path[dataset_name]
+    if dataset_name == 'geo_yfcc':
+        loader = yfcc_train_loader(path, indices, num_workers, batch_size, pin_memory, drop_last)
+    elif dataset_name == 'imagenet' or dataset_name == 'yfcc_imagenet':
+        loader = imagenet_train_loader(path, indices, num_workers, batch_size, pin_memory, drop_last)
+    elif dataset_name == 'combined_imagenet':
+        loader = combined_train_loader(dataset, indices, num_workers, batch_size, pin_memory, drop_last)
+    return loader
+
+def combined_train_loader(dataset, indices, num_workers, batch_size, pin_memory, drop_last):
+    #TODO
+
+def ffcv_val_loader(dataset_name, indices=None, num_workers=8, batch_size=128, pin_memory=True):
+    path = val_path[dataset_name]
+    if dataset_name == 'geo_yfcc':
+        loader = yfcc_val_loader(path, indices, num_workers, batch_size, pin_memory)
+    elif dataset_name == 'imagenet' or dataset_name == 'yfcc_imagenet':
+        loader = imagenet_val_loader(path, indices, num_workers, batch_size, pin_memory)
+    return loader
+
+def ffcv_train_val_loader(dataset_name, indices=None, num_workers=8, batch_size=128, pin_memory=True):
+    path = train_path[dataset_name]
+    if dataset_name == 'geo_yfcc':
+        loader = yfcc_val_loader(path, indices, num_workers, batch_size, pin_memory)
+    elif dataset_name == 'imagenet' or dataset_name == 'yfcc_imagenet':
+        loader = imagenet_val_loader(path, indices, num_workers, batch_size, pin_memory)
+    return loader
+    
+def imagenet_train_loader(path, indices=None, num_workers=8, batch_size=128, pin_memory=True, drop_last=True):
+    # path = '/self/scr-sync/nlp/imagenet_ffcv/train_512_1.0_90.ffcv'
+    target_resolution = (224, 224)
+    IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
+    IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
+    this_device = f'cuda:{0}'
+    # decoder = RandomResizedCropRGBImageDecoder((160,160))
+    decoder = RandomResizedCropRGBImageDecoder(target_resolution)
+    
+    image_pipeline: List[Operation] = [
+        decoder,
+        RandomHorizontalFlip(),
+        ToTensor(),
+        ToDevice(torch.device(this_device), non_blocking=True),
+        ToTorchImage(),
+        NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)
+    ]
+
+    label_pipeline: List[Operation] = [
+        IntDecoder(),
+        ToTensor(),
+        Squeeze(),
+        ToDevice(torch.device(this_device), non_blocking=True)
+    ]
+
+    train_loader = Loader(path,
+                        batch_size=batch_size,
+                        num_workers=num_workers,
+                        order=OrderOption.QUASI_RANDOM,
+                        drop_last=drop_last,
+                        indices=indices,
+                        os_cache=pin_memory,
+                        pipelines={
+                            'image': image_pipeline,
+                            'label': label_pipeline
+    })
+    return train_loader
+
+def imagenet_val_loader(path, indices=None, num_workers=8, batch_size=128, pin_memory=True):
+    # path = '/self/scr-sync/nlp/imagenet_ffcv/val_512_1.0_90.ffcv'
+    target_resolution = (224, 224)
+    crop_ratio = 224.0/256.0
+    IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
+    IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
+    this_device = f'cuda:{0}'
+    cropper = CenterCropRGBImageDecoder(target_resolution, ratio=crop_ratio)
+
+    image_pipeline = [
+        cropper,
+        ToTensor(),
+        ToDevice(torch.device(this_device), non_blocking=True),
+        ToTorchImage(),
+        NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)
+    ]
+
+    label_pipeline = [
+        IntDecoder(),
+        ToTensor(),
+        Squeeze(),
+        ToDevice(torch.device(this_device), non_blocking=True)
+    ]
+    val_loader = Loader(path,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            order=OrderOption.SEQUENTIAL,
+            drop_last=False,
+            indices=indices,
+            os_cache=pin_memory,
+            pipelines={
+                'image': image_pipeline,
+                'label': label_pipeline
+    })
+    return val_loader
+
+def yfcc_train_loader(path, indices=None, num_workers=8, batch_size=128, pin_memory=True, drop_last=True):
+    # path = '/self/scr-sync/nlp/geo_yfcc_ffcv/one_label_train.beton'
+    # path = '/self/scr-sync/nlp/geo_yfcc_ffcv_jpg/one_label_all.beton'
+    target_resolution = (224, 224)
+    train_image_pipeline = [
+        RandomResizedCropRGBImageDecoder(target_resolution, scale=(0.9, 1.0), ratio=(0.75, 1.3333333333333333)),
+        RandomHorizontalFlip(),
+        NormalizeImage(np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225]), np.dtype('float32')),
+        ToTensor(),
+        ToTorchImage(),
+    ]
+    train_loader = Loader(path,
+                        batch_size=batch_size,
+                        num_workers=num_workers,
+                        order=OrderOption.RANDOM,
+                        drop_last=drop_last,
+                        indices=indices,
+                        os_cache=pin_memory,
+                        pipelines={
+                            'image': train_image_pipeline,
+                            'label': [IntDecoder(), ToTensor()],
+                            'metadata': [NDArrayDecoder(), ToTensor()]
+    })
+    return train_loader
+
+def yfcc_val_loader(path, indices=None, num_workers=8, batch_size=128, pin_memory=True):
+    # path = '/self/scr-sync/nlp/geo_yfcc_ffcv/one_label_val.beton'
+    # path = '/self/scr-sync/nlp/geo_yfcc_ffcv_jpg/one_label_all.beton'
+    target_resolution = (224, 224)
+    eval_image_pipeline = [
+        CenterCropRGBImageDecoder(target_resolution, 224.0/256.0),
+        NormalizeImage(np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225]), np.dtype('float32')),
+        ToTensor(),
+        ToTorchImage(),
+    ]
+    val_loader = Loader(path,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            order=OrderOption.SEQUENTIAL,
+            drop_last=False,
+            indices=indices,
+            os_cache=pin_memory,
+            pipelines={
+                'image': eval_image_pipeline,
+                'label': [IntDecoder(), ToTensor()],
+                'metadata': [NDArrayDecoder(), ToTensor()]
+    })
+    return val_loader
