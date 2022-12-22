@@ -177,11 +177,11 @@ def main():
     elif args.dataset == 'waterbirds':
         dataset = get_dataset(dataset=args.dataset, download=True, root_dir = args.root_dir)
     elif args.dataset == 'imagenet':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "./imagenet_meta/imagenet_train_meta.pkl")
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/u/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/imagenet_train_meta.pkl")
     elif args.dataset == 'yfcc_imagenet':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = '/u/scr/nlp/data/yfcc_clip/yfcc_imagenet_hardmatch_one_label.pickle')
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = '/u/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/yfcc_imagenet_hardmatch_one_label.pickle')
     elif args.dataset == 'combined_imagenet':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "./imagenet_meta/combined_imagenet_yfcc.pkl")
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/u/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/combined_imagenet_yfcc.pkl")
    
     print(dataset.metadata_fields)
     #print(dataset.metadata_map)
