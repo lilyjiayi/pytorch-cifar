@@ -68,7 +68,7 @@ def main():
     parser.add_argument('--online', '-o', action='store_true',
                         help='only train newly selected datapoints for each query round')
     # dataset
-    parser.add_argument('--dataset', default='celebA', type=str, choices=['waterbirds', 'celebA', 'domainnet', 'geo_yfcc', 'imagenet', 'yfcc_imagenet']) 
+    parser.add_argument('--dataset', default='celebA', type=str, choices=['waterbirds', 'celebA', 'domainnet', 'geo_yfcc', 'imagenet', 'yfcc_imagenet', 'combined_imagenet']) 
     parser.add_argument('--use_four', action='store_true',
                         help='for domainnet dataset, only use "clipart", "painting", "real", "sketch"')
     parser.add_argument('--use_sentry', action='store_true',
@@ -161,6 +161,7 @@ def main():
                 query = queries[0]
                 args.checkpoint = f'./{checkpoint_dir}/{query}.pth'
     
+#################################################################################################################################################################################    
     # Data
     print('==> Preparing data..')
     # Load the full dataset, and download it if necessary
@@ -177,14 +178,14 @@ def main():
     elif args.dataset == 'waterbirds':
         dataset = get_dataset(dataset=args.dataset, download=True, root_dir = args.root_dir)
     elif args.dataset == 'imagenet':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/u/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/imagenet_train_meta.pkl")
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/nlp/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/imagenet_train_meta.pkl")
     elif args.dataset == 'yfcc_imagenet':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = '/u/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/yfcc_imagenet_hardmatch_one_label.pickle')
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/nlp/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/yfcc_imagenet_hardmatch_one_label.pickle")
     elif args.dataset == 'combined_imagenet':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/u/scr-sync/nlp/yfcc_imagenet_ffcv/imagenet_meta/combined_imagenet_yfcc.pkl")
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = "/nlp/scr-sync/nlp/combined_imagenet_ffcv/combined_withpath.pkl")
    
     print(dataset.metadata_fields)
-    #print(dataset.metadata_map)
+    # print(dataset.metadata_map)
 
     # Create Grouper
     if args.dataset == 'geo_yfcc':
@@ -261,36 +262,44 @@ def main():
         val_idx = np.random.choice(range(len(raw_val_data)), round(args.frac*len(raw_val_data)), replace=False)
         val_data = WILDSSubset(raw_val_data, val_idx, transform=None)
     else:
-        val_idx = np.arange(len(raw_val_data))
-        val_data = raw_val_data
-    
+        # val_idx = np.arange(len(raw_val_data))
+        # val_data = raw_val_data
+
+        # for testing difference between imagenet and yfcc_imagenet
+        val_idx = np.load("./imagenet_yfcc_compare/combined_val.npy")
+        val_idx = val_idx.astype(int)
+        val_data = WILDSSubset(raw_val_data, val_idx, transform=None)
+
     # print out info of val set
     print(f'Val set size: {len(val_data)}')
     _,_,_ = log_selection(np.arange(len(val_data)), val_data, 
                               grouper, full_grouper, label_grouper,                                                                        
                               0, 'data_val', args.log_op)
 
-    # Prepare data loader
+    # Prepare validation data loader
     if args.loader == 'ffcv':
-        train_loader = ffcv_train_loader(args.dataset, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory, drop_last=args.drop_last)
-        print(f"The raw train loader size is {len(train_loader.indices)}")
-        val_loader = ffcv_val_loader(args.dataset, val_idx, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory)
-        train_val_loader = ffcv_train_val_loader(args.dataset, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory)
+        val_loader = ffcv_val_loader(args.dataset, dataset=dataset, indices=val_idx, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory)
+        # train_val_loader = ffcv_train_val_loader(args.dataset, dataset=train_data, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory)
+        train_val_loader = None
     else:
-        train_loader = get_train_loader("standard", train_data, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last, pin_memory=pin_memory)
         val_loader = get_eval_loader("standard", val_data, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=pin_memory)
         train_val_loader = None
 
+#################################################################################################################################################################################    
     # Model
     print('==> Building model..')
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     best_acc = 0  # best test accuracy
     epoch = 0  # start from epoch 0 or last checkpoint epoch
-    unlabeled_mask = np.ones(len(train_data)) # We assume that in the beginning, the entire train set is unlabeled
     curr_query = 0
     curr_wg = None
-    train_idx = None
     curr_test_acc = None
+    train_idx = None
+
+    unlabeled_mask = np.ones(len(train_data)) # We assume that in the beginning, the entire train set is unlabeled
+    if args.dataset == 'combined_imagenet': # for combined imagenet dataset, training and validation data share the same beton file 
+        # exclude the samples set as validation data
+        unlabeled_mask[val_idx] = 0
 
     num_classes = train_data.n_classes  # number of classes in the classification problem
     print(f"num_classes is {num_classes}")
@@ -337,8 +346,8 @@ def main():
 
     else:
         # Initialize counterss
-        round_step = 0 #keeps track of number of steps for this query round, not really used
-        #query_start_epoch = np.zeros(args.num_queries + 1) # store the start epoch index for each query; the first query is the initial seed set with start epoch 0
+        round_step = 0 # keeps track of number of steps for this query round, not really used
+        # query_start_epoch = np.zeros(args.num_queries + 1) # store the start epoch index for each query; the first query is the initial seed set with start epoch 0
 
         # Label the initial subset
         if args.no_al:
@@ -369,9 +378,16 @@ def main():
                 distribution = [float(i) for i in raw_prob]
                 distribution = np.array(distribution)
                 assert distribution.size == num_groups, "Distribution needs to have correct number of groups"
-            idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=train_val_loader,
-                                sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
-                                replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
+            # idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
+            #                     sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
+            #                     replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
+            
+            # for testing difference between imagenet and yfcc_imagenet
+            idx = np.load("./imagenet_yfcc_compare/yfcc_train.npy")
+            # idx = np.load("./imagenet_yfcc_compare/imagenet_train.npy")
+            idx = idx.astype(int)
+            unlabeled_mask[idx] = 0
+
             _,_,_ = log_selection(idx, train_val_data, 
                                  grouper, full_grouper, label_grouper,                                                                        
                                  curr_query, 'selection_per_query', args.log_op)
@@ -383,7 +399,7 @@ def main():
                                                                             curr_query, 'selection_accumulating', args.log_op)        
         data_size = np.sum(unlabeled_mask == 0) #keeps track of number of distinct labeled datapoints
         if args.loader == 'ffcv':
-            train_loader = ffcv_train_loader(args.dataset, train_idx, args.num_workers, args.batch_size, pin_memory, args.drop_last)
+            train_loader = ffcv_train_loader(args.dataset, dataset=train_data, indices=train_idx, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory, drop_last=args.drop_last)
             print(f"The current train loader size is {len(train_loader.indices)}, length is {len(train_loader)}")
         else:
             curr_train_data = WILDSSubset(train_data, train_idx, transform=None)
@@ -404,13 +420,14 @@ def main():
                               epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, train_group)
             if not(query_end):
                 curr_test_acc, val_probs, val_losses = test(epoch, net, val_loader, criterion, device, False, curr_query)
+                log_group_metrics(val_data.y_array, val_data.metadata_array, val_probs, val_losses, device, args.log_op, 
+                          epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, 'val')
             epoch += 1
             round_step += len(train_loader)
         curr_test_acc, val_probs, val_losses = test(epoch, net, val_loader, criterion, device, True, curr_query)
         wg, wg_full, wg_label, g_acc, g_scores, g_losses = log_group_metrics(val_data.y_array, val_data.metadata_array, val_probs, val_losses, device, args.log_op, 
                           epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, 'val_per_query')
                           
-        
        # find worst group according to args.group_strategy and args.group_div
         curr_wg = find_target_group(args.group_strategy, args.group_div, val_probs, val_data.metadata_array, train_probs, curr_meta_array,
                                     wg, wg_full, wg_label, 
@@ -421,15 +438,16 @@ def main():
         save_checkpoint(args.save, curr_query % args.save_every == 0, net, curr_test_acc, epoch,
                         curr_query, unlabeled_mask, train_idx, curr_wg, args.save_name, wandb.run.name)
 
+#################################################################################################################################################################################
     # Start the query loop 
     for query in range(args.num_queries - curr_query):
-        #print(query_start_epoch)
-        #query_start_epoch[query + 1] = epoch
+        # print(query_start_epoch)
+        # query_start_epoch[query + 1] = epoch
         curr_query += 1
         round_step = 0
 
         # Query the oracle for more labels
-        idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.query_size, ffcv_loader=train_val_loader,
+        idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.query_size, ffcv_loader=args.loader, dataset_name=args.dataset,
                                val_probs=val_probs, group_strategy=args.group_strategy, p=args.alpha, wg=curr_wg, query_strategy=args.query_strategy, 
                                group_losses=g_losses, group_acc=g_acc, score_fn=args.score_fn, calibration=(not args.nocal), addcal=args.addcal, noise=args.noise,
                                replacement=args.replacement, pool_size=args.pool_size, batch_size=args.batch_size, num_workers=args.num_workers)
@@ -453,15 +471,16 @@ def main():
                                                                             curr_query, 'selection_accumulating', args.log_op)
         data_size = np.sum(unlabeled_mask == 0)
         if args.loader == 'ffcv':
-            train_loader = ffcv_train_loader(args.dataset, train_idx, args.num_workers, args.batch_size, pin_memory, args.drop_last)
-            print(f"The current train loader size is {len(train_loader.indices)}")
+            train_loader = ffcv_train_loader(args.dataset, dataset=train_data, indices=train_idx, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory, drop_last=args.drop_last)
+            print(f"The current train loader size is {len(train_loader.indices)}, length is {len(train_loader)}")
         else:
             curr_train_data = WILDSSubset(train_data, train_idx, transform=None)
             train_loader = get_train_loader("standard", curr_train_data, batch_size=args.batch_size, num_workers=args.num_workers, drop_last=args.drop_last, pin_memory=pin_memory)
         
         if args.online: #only train on newly labeled datapoints
             if args.loader == 'ffcv':
-                train_loader.indices = idx
+                train_loader = ffcv_train_loader(args.dataset, dataset=train_data, indices=idx, num_workers=args.num_workers, batch_size=args.batch_size, pin_memory=pin_memory, drop_last=args.drop_last)
+                print(f"The current train loader size is {len(train_loader.indices)}, length is {len(train_loader)}")
             else:
                 train_loader = get_train_loader("standard", WILDSSubset(train_data, idx, transform=None), 
                                                 batch_size=args.batch_size, num_workers=args.num_workers, drop_last=False) # to use the full data, drop_last is set to false and train() has been modified to handle partially full batch
@@ -497,6 +516,7 @@ def main():
         save_checkpoint(args.save, curr_query % args.save_every == 0, net, curr_test_acc, epoch,
                         curr_query, unlabeled_mask, train_idx, curr_wg, args.save_name, wandb.run.name)
 
+#################################################################################################################################################################################
 
 def get_optimizer(optimizer, net, lr, momentum, weight_decay):
     if optimizer == 'sgd':
@@ -527,10 +547,12 @@ def get_data_splits(dataset_name, dataset):
         raw_val_data = get_dataset(dataset=dataset_name, download=False, root_dir = "./imagenet_meta/imagenet_val_meta.pkl")
         return train_data, train_data, raw_val_data
     elif dataset_name == 'yfcc_imagenet':
-        train_data = get_dataset(dataset='imagenet', download=False, root_dir = '/u/scr/nlp/data/yfcc_clip/yfcc_imagenet_hardmatch_one_label.pickle')
-        raw_val_data = get_dataset(dataset='imagenet', download=False, root_dir = '/u/scr/nlp/data/yfcc_clip/yfcc_imagenet_hardmatch_one_label.pickle')
-        # train_data = WILDSSubset(train_data, np.arange(10000), transform=None)
-        raw_val_data = WILDSSubset(raw_val_data, np.arange(10000), transform=None)
+        train_data = get_dataset(dataset=dataset_name, download=False, root_dir = '/u/scr/nlp/data/yfcc_clip/yfcc_imagenet_hardmatch_one_label.pickle')
+        raw_val_data = get_dataset(dataset=dataset_name, download=False, root_dir = '/u/scr/nlp/data/yfcc_clip/yfcc_imagenet_hardmatch_one_label.pickle')
+        return train_data, train_data, raw_val_data
+    elif dataset_name == 'combined_imagenet':
+        train_data = get_dataset(dataset=dataset_name, download=False, root_dir = "/nlp/scr-sync/nlp/combined_imagenet_ffcv/combined_withpath.pkl")
+        raw_val_data = get_dataset(dataset=dataset_name, download=False, root_dir = "/nlp/scr-sync/nlp/combined_imagenet_ffcv/combined_withpath.pkl")
         return train_data, train_data, raw_val_data
     
         
@@ -573,19 +595,22 @@ def get_data_splits(dataset_name, dataset):
     return train_data, train_val_data, raw_val_data
 
 def get_test(dataset):
-    if dataset == "imagenet" or "yfcc_imagenet":
+    allowed_datasets = ["imagenet", "yfcc_imagenet"]
+    if dataset in allowed_datasets:
         return test_imagenet
     else:
         return test_loop
 
 def get_train(dataset):
-    if dataset == "imagenet" or "yfcc_imagenet":
+    allowed_datasets = ["imagenet", "yfcc_imagenet"]
+    if dataset in allowed_datasets:
         return train_imagenet
     else:
         return train_loop
 
 # Train
 def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, optimizer, scheduler, criterion, device, query_end, curr_query):
+    print('Using imagenet train')
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
@@ -598,10 +623,7 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
     meta_array = torch.tensor([]).to(device)
     for batch_idx, (inputs, targets) in enumerate(dataloader):
         step += 1
-        # For specific lr scheduling defined in al_utils.py
-        # lr = get_lr(step, data_size, args.lr)
-        # for g in optimizer.param_groups:
-        #     g['lr'] = lr
+        # dataloader does not contain metadata, set default metadata to y labels
         metadata = targets
         inputs, targets = inputs.to(device), targets.to(device)
         targets = targets.reshape(-1)
@@ -612,8 +634,7 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
         with torch.cuda.amp.autocast():
             outputs = net(inputs)
             raw_loss = criterion(outputs, targets)
-            loss = torch.mean(raw_loss)
-            loss = loss * inputs.size()[0] / batch_size
+            loss = torch.sum(raw_loss) / batch_size
         losses = torch.cat((losses, raw_loss))
         lr = scheduler.get_last_lr()[0]
         probs = F.softmax(outputs, dim=1)
@@ -641,7 +662,7 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
     # if the current epoch is the last of the query round 
     if query_end:
         wandb.log({"general/epoch": epoch, "general/data_size": data_size, "general/curr_query": curr_query,
-                "train_per_query/query_end_train_loss": train_loss/num_samples, "train_per_query/query_end_train_acc":100.*correct/total})
+                "train_per_query/query_end_train_loss": train_loss/len(dataloader), "train_per_query/query_end_train_acc":100.*correct/total})
     
     probabilities = probabilities.detach()
     losses = losses.detach()
@@ -653,6 +674,7 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
 # Test
 def test_imagenet(epoch, net, dataloader, criterion, device, query_end, curr_query):
     net.eval()
+    batch_size = dataloader.batch_size
     test_loss = 0
     correct = 0
     total = 0
@@ -673,9 +695,9 @@ def test_imagenet(epoch, net, dataloader, criterion, device, query_end, curr_que
 
             loss = criterion(outputs, targets)
             losses = torch.cat((losses.to(device), loss))
-            loss = torch.mean(loss)
+            loss = torch.sum(loss)/batch_size
             # test_loss += loss * inputs.size()[0]
-            test_loss += loss 
+            test_loss += loss.item()
             _, predicted = outputs.max(1)
 
             total += targets.size(0)
@@ -688,15 +710,16 @@ def test_imagenet(epoch, net, dataloader, criterion, device, query_end, curr_que
     # if the current epoch is the last of the query round 
     if query_end:
         wandb.log({"general/epoch": epoch,  "general/curr_query": curr_query,
-                "val_per_query/test_loss": test_loss/num_samples, "val_per_query/test_acc":100.*correct/total})
+                "val_per_query/test_loss": test_loss/len(dataloader), "val_per_query/test_acc":100.*correct/total})
 
     acc = 100.*correct/total
 
     return acc, probabilities, losses
 
 # Train
-def train_loop(epoch, step, net, dataloader, batch_size, data_size, optimizer, scheduler, criterion, device, query_end, curr_query):
+def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, optimizer, scheduler, criterion, device, query_end, curr_query):
     print('\nEpoch: %d' % epoch)
+    print('Using train loop')
     net.train()
     train_loss = 0
     correct = 0
@@ -713,48 +736,54 @@ def train_loop(epoch, step, net, dataloader, batch_size, data_size, optimizer, s
         # for g in optimizer.param_groups:
         #     g['lr'] = lr
         inputs, targets = inputs.to(device), targets.to(device)
-        targets = targets.reshape(-1)
         y_array = torch.cat((y_array, targets))
         meta_array = torch.cat((meta_array, metadata.to(device)))
         num_samples += inputs.size()[0]
         optimizer.zero_grad()
-        outputs = net(inputs)
+        
+        with torch.cuda.amp.autocast():
+            outputs = net(inputs)
+            raw_loss = criterion(outputs, targets)
+            loss = torch.sum(raw_loss) / batch_size
+        losses = torch.cat((losses, raw_loss))
+        lr = scheduler.get_last_lr()[0]
         probs = F.softmax(outputs, dim=1)
         probabilities = torch.cat((probabilities, probs))
-        loss = criterion(outputs, targets)
-        losses = torch.cat((losses, loss))
-        loss = torch.mean(loss)
-        lr = scheduler.get_last_lr()[0]
         wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
-        loss = loss * inputs.size()[0] / batch_size
-        loss.backward()
         
-        optimizer.step()
-        #if not no_al:
+        # loss.backward()
+        scaler.scale(loss).backward()
+        # optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
+
         scheduler.step()
-        train_loss += loss.item() * batch_size
+        # train_loss += loss.item() * batch_size
+        train_loss += loss.item()
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
         progress_bar(batch_idx, len(dataloader), 'Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                     % (lr, train_loss/num_samples, 100.*correct/total, correct, total))
+                     % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
 
-    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/num_samples, "train/train_acc":100.*correct/total})
+    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total})
     
     # if the current epoch is the last of the query round 
     if query_end:
         wandb.log({"general/epoch": epoch, "general/data_size": data_size, "general/curr_query": curr_query,
-                "train_per_query/query_end_train_loss": train_loss/num_samples, "train_per_query/query_end_train_acc":100.*correct/total})
+                "train_per_query/query_end_train_loss": train_loss/len(dataloader), "train_per_query/query_end_train_acc":100.*correct/total})
        
     probabilities = probabilities.detach()
     losses = losses.detach()
     y_array = y_array.detach().int()
     meta_array = meta_array.detach()
+
     return train_loss/len(dataloader), 100.*correct/total, probabilities, losses, y_array, meta_array
 
 # Test
 def test_loop(epoch, net, dataloader, criterion, device, query_end, curr_query):
+    batch_size = dataloader.batch_size
     net.eval()
     test_loss = 0
     correct = 0
@@ -765,30 +794,33 @@ def test_loop(epoch, net, dataloader, criterion, device, query_end, curr_query):
     with torch.no_grad():
         for batch_idx, (inputs, targets, metadata) in enumerate(dataloader):
             inputs, targets = inputs.to(device), targets.to(device)
-            targets = targets.reshape(-1)
+            # targets = targets.reshape(-1)
             num_samples += inputs.size()[0]
-            outputs = net(inputs)
+            # outputs = net(inputs)
+            with torch.cuda.amp.autocast():
+                outputs = net(inputs)
 
             probs = F.softmax(outputs, dim=1)
             probabilities = torch.cat((probabilities, probs))
 
             loss = criterion(outputs, targets)
             losses = torch.cat((losses.to(device), loss))
-            loss = torch.mean(loss)
-            test_loss += loss * inputs.size()[0]
+            loss = torch.sum(loss) / batch_size
+            # test_loss += loss * inputs.size()[0]
+            test_loss += loss.item()
             _, predicted = outputs.max(1)
 
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
             progress_bar(batch_idx, len(dataloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                         % (test_loss/num_samples, 100.*correct/total, correct, total))
-    wandb.log({"general/epoch": epoch, "val/epoch_loss":test_loss/num_samples, "val/test_acc":100.*correct/total})
+                         % (test_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+    wandb.log({"general/epoch": epoch, "val/epoch_loss":test_loss/len(dataloader), "val/test_acc":100.*correct/total})
 
     # if the current epoch is the last of the query round 
     if query_end:
         wandb.log({"general/epoch": epoch,  "general/curr_query": curr_query,
-                 "val_per_query/test_loss": test_loss/num_samples, "val_per_query/test_acc":100.*correct/total})
+                 "val_per_query/test_loss": test_loss/len(dataloader), "val_per_query/test_acc":100.*correct/total})
 
     acc = 100.*correct/total
 
@@ -812,7 +844,6 @@ def find_target_group(group_strategy, group_div, val_prob, val_meta, train_prob,
         curr_wg = np.argmin(group_ct)
         if group_div == 'full': curr_wg = np.argmin(group_ct_full)
         if group_div == 'label': curr_wg = np.argmin(group_ct_label)
-        #print("Group strategy is min, the smallest group is {}".format(grouper.group_str(curr_wg)))
     elif group_strategy == 'avg_c_val':
         curr_wg = get_avgc_worst_group(val_prob, query_grouper, val_meta)
     elif group_strategy == 'avg_c_train':
@@ -866,7 +897,7 @@ def print_log_selection_info(idx, dataset, grouper, curr_query, wandb_name, grou
     if (group_type == 'standard' and log_op != 'no_log') or (log_op == 'log'): 
         for i in range(len(group_counts)):
             query_info[f"{wandb_name}_{group_type}/{grouper.group_str(i)}"] = 100.0 * group_counts[i]/total
-            # print("{}, group: {}, count: {}, percentage:{} \n".format(wandb_name, grouper.group_str(i), group_counts[i], 100.0 *group_counts[i]/total))
+            print("{}, group: {}, count: {}, percentage:{} \n".format(wandb_name, grouper.group_str(i), group_counts[i], 100.0 *group_counts[i]/total))
         wandb.log(dict(**query_info, **{"general/curr_query":curr_query}))
     return group_counts
 
@@ -894,7 +925,11 @@ def log_group_metrics(y_array, meta_array, probabilities, losses, device, log_op
         g_acc = g_acc_l
         g_scores = g_scores_l
         g_losses = g_losses_l
-    # print(f"Group_accuracies are {g_acc}")
+    print(f"Group_accuracies are {g_acc}")
+    # non_empty_group_acc = g_acc_f[np.nonzero(g_acc_f <= 1)[0]]
+    # sorted_indices = np.argsort(non_empty_group_acc)
+    # print(f"Full group worst five accuracies are {non_empty_group_acc[sorted_indices[:5]]}")
+    # print(f"Full group best five accuracies are {non_empty_group_acc[sorted_indices[-5:]]}")
 
     return worst_group, worst_group_full, worst_group_label, g_acc, g_scores, g_losses
 
@@ -915,17 +950,17 @@ def get_worst_group(y_array, meta_array, grouper, probabilities, losses, device,
     for i in range(num_group):
         group_idx = torch.nonzero(group == i).squeeze()
         if group_counts[i] > 0: 
-            acc[i] = torch.sum(y_array[group_idx] == predictions[group_idx])/group_counts[i]
-            group_scores[i] = torch.sum(confidences[group_idx])/group_counts[i]
-            group_losses[i] = torch.sum(losses[group_idx])/group_counts[i]
+            acc[i] = torch.sum(y_array[group_idx] == predictions[group_idx])/(group_counts[i])
+            group_scores[i] = torch.sum(confidences[group_idx])/(group_counts[i])
+            group_losses[i] = torch.sum(losses[group_idx])/(group_counts[i])
         else: 
             acc[i] = 1.01
         # auc[i] = calculate_auc(probabilities, y_array)
         if (prefix == 'standard' and log_op != 'no_log') or (log_op == 'log'):
             results.update({f'{prefix}_acc_{grouper.group_str(i)}':acc[i]})
-            # results.update({f'{prefix}_score_{grouper.group_str(i)}':group_scores[i]})
-            # results.update({f'{prefix}_loss_{grouper.group_str(i)}':group_losses[i]})
-            #results.update({f'{prefix}_auc_{grouper.group_str(i)}':auc[i]})
+            results.update({f'{prefix}_score_{grouper.group_str(i)}':group_scores[i]})
+            results.update({f'{prefix}_loss_{grouper.group_str(i)}':group_losses[i]})
+            results.update({f'{prefix}_auc_{grouper.group_str(i)}':auc[i]})
     # accuracy worst group
     worst_group = np.argmin(acc)
     wg_acc = acc[worst_group]

@@ -20,6 +20,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 from torch.utils.data.sampler import SubsetRandomSampler
 from wilds.common.data_loaders import get_train_loader, get_eval_loader
+from ffcv_dataloader import ffcv_train_loader, ffcv_val_loader, ffcv_train_val_loader
+from ffcv.loader import Loader
 
 import torchvision
 import torchvision.transforms as transforms
@@ -53,8 +55,9 @@ def least_confidence_query(model, device, data_loader, query_size=10, calibrator
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(data_loader):
-            data, _, _ = batch
-            logits = model(data.to(device))
+            data = batch[0]
+            with torch.cuda.amp.autocast():
+              logits = model(data.to(device))
             probabilities = F.softmax(logits, dim=1)
             probs = torch.cat((probs, probabilities))
             progress_bar(batch_idx, len(data_loader), 'Querying least confidence')
@@ -76,15 +79,17 @@ def margin_query(model, device, data_loader, query_size=10, noise=0.0):
     margins = []
     model.eval() 
     with torch.no_grad():
-        for batch in data_loader:      
-            data, _, _ = batch
-            logits = model(data.to(device))
+        for batch_idx, batch in enumerate(data_loader):    
+            data = batch[0]
+            with torch.cuda.amp.autocast():
+              logits = model(data.to(device))
             probabilities = F.softmax(logits, dim=1)
             # Select the top two class confidences for each sample
             toptwo = torch.topk(probabilities, 2, dim=1)[0]
             # Compute the margins = differences between the two top confidences
             differences = toptwo[:,0]-toptwo[:,1]
             margins.extend(torch.abs(differences).cpu().tolist())
+            progress_bar(batch_idx, len(data_loader), 'Querying margin')
 
     margin = np.asarray(margins)
     if noise > 0:
@@ -117,14 +122,14 @@ def query(model, device, data_loader, query_size=10, query_strategy='margin_logi
     sorted_idx = np.argsort(margin)
     return sorted_idx[0:query_size]
 
-
 def calculate_probs(model, device, data_loader, return_logit=False):
   probs = torch.tensor([]).to(device)
   logs = torch.tensor([]).to(device)
   with torch.no_grad():
     for batch_idx, batch in enumerate(data_loader):
-      data, _, _ = batch
-      logits = model(data.to(device))
+      data = batch[0]
+      with torch.cuda.amp.autocast():
+        logits = model(data.to(device))
       logs = torch.cat((logs, logits))
       probabilities = F.softmax(logits, dim=1)
       probs = torch.cat((probs, probabilities))     
@@ -133,9 +138,9 @@ def calculate_probs(model, device, data_loader, return_logit=False):
     return logs, probs
   return probs
 
-def threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, 
+def threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, pool_loader=None,
                     val_probs=None, group_balance=False, group_spec=False, score_fn='MC', calibration=True):
-  _, atc_groups, _, candidate_idx = atc(model, device, pool_data, val_data, grouper, batch_size, num_workers,
+  _, atc_groups, _, candidate_idx = atc(model, device, pool_data, val_data, grouper, batch_size, num_workers, target_loader=pool_loader,
                                      source_probs=val_probs, return_error_idx=True, group_spec=group_spec, score_fn=score_fn, calibration=calibration)
 
   if group_balance:
@@ -145,13 +150,16 @@ def threshold_query(model, device, pool_data, val_data, grouper, query_size, bat
     mask = np.zeros(len(pool_data))
     mask[candidate_idx] = 1
     sample_idx = sample_from_distribution(weights, pool_data, mask, query_size, grouper, 'random',
-                                          batch_size, num_workers, model, device, val_data)
+                                          batch_size, num_workers, model, device, val_data, ffcv_loader=pool_loader)
   else:
-    sample_idx = np.random.choice(candidate_idx, query_size, replace=True)
+    if len(candidate_idx) < query_size: 
+      sample_idx = candidate_idx
+    else:
+      sample_idx = np.random.choice(candidate_idx, query_size, replace=False)
 
   return sample_idx
 
-def atc(model, device, target_data, source_val_data, grouper, batch_size, num_workers, 
+def atc(model, device, target_data, source_val_data, grouper, batch_size, num_workers, target_loader=None,
         test_probs=None, source_probs=None, return_error_idx=False, group_spec=False, score_fn='MC', calibration=True):
   group, group_count = grouper.metadata_to_group(target_data.metadata_array, return_counts=True)
   group = group.cpu().numpy()
@@ -168,7 +176,8 @@ def atc(model, device, target_data, source_val_data, grouper, batch_size, num_wo
 
   if test_probs is None:
     print("Calculating target probabilities")
-    target_loader = DataLoader(target_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
+    if target_loader is None:
+      target_loader = DataLoader(target_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
     test_probs = calculate_probs(model, device, target_loader)
   # print(f"Size of test_probs is {test_probs.size}")
   test_probs = test_probs.cpu().numpy()
@@ -207,12 +216,13 @@ def atc(model, device, target_data, source_val_data, grouper, batch_size, num_wo
       atc_groups[g] = 100.0 - error_in_group.size / group_count[g] * 100.0
 
   print(f"ATC estimated accuracy on target data is {atc_acc}")
-  print(f"ATC estimated accuracy on target groups are {atc_groups}")
-  print(f"ATC estimated threshold on target groups are {group_threshold}")
+  print(f"ATC estimated threshold on target data is {group_threshold[0]}")
+  # print(f"ATC estimated accuracy on target groups are {atc_groups}")
+  # print(f"ATC estimated threshold on target groups are {group_threshold}")
 
   results = compare_actual_error(target_data, test_probs, candidate_idx, grouper)
   print("Precision and recall for ATC predicted errors are")
-  print(results)
+  print(results[0])
   atc_prec_recall = results[1:, :].flatten()
 
   #for analysis only 
@@ -271,7 +281,6 @@ def save_probs_info(probs, data, grouper, name):
   print(f"rank is of shape {reversed_rank.shape}")
   reversed_rank.to_csv(f"./uncertainty_results/{name}/rank.csv")
 
-
 def get_atc_threshold(source_probs, source_labels, test_probs, score_fn='MC', calibration=True):
   calibration_error = -1
   if calibration:
@@ -304,20 +313,20 @@ def compare_actual_error(test_data, test_probs, candidate_idx, grouper):
   results[0,1] = recall
   true_acc =  np.zeros(group_counts.size+1)
   true_acc[0] = (1 - true_error_idx.size / len(test_data)) * 100.0
-  for i in range(group_counts.size):
-    if group_counts[i] > 0:
-      group_idx = np.nonzero(group==i)[0]
-      group_real_error = np.intersect1d(true_error_idx, group_idx)
-      true_acc[i+1] = (1 - group_real_error.size / group_counts[i])*100.0
-      prec, recall = precision_recall(np.intersect1d(candidate_idx, group_idx), group_real_error)
-      results[i+1,0] = prec
-      results[i+1,1] = recall
-    else:
-      true_acc[i+1] = None
-      results[i+1,0] = None
-      results[i+1,1] = None
+  # for i in range(group_counts.size):
+  #   if group_counts[i] > 0:
+  #     group_idx = np.nonzero(group==i)[0]
+  #     group_real_error = np.intersect1d(true_error_idx, group_idx)
+  #     true_acc[i+1] = (1 - group_real_error.size / group_counts[i])*100.0
+  #     prec, recall = precision_recall(np.intersect1d(candidate_idx, group_idx), group_real_error)
+  #     results[i+1,0] = prec
+  #     results[i+1,1] = recall
+  #   else:
+  #     true_acc[i+1] = None
+  #     results[i+1,0] = None
+  #     results[i+1,1] = None
   print(f"Actual acc on target data is {true_acc[0]}")
-  print(f"Actual acc on target data groups are {true_acc[1:]}")
+  # print(f"Actual acc on target data groups are {true_acc[1:]}")
   return results
   
 def precision_recall(predicted, true):
@@ -333,7 +342,7 @@ def precision_recall(predicted, true):
   return prec, recall
 
 def sample_from_distribution(distribution, dataset, unlabeled_mask, query_size, grouper, query_strategy,
-                             batch_size, num_workers, model, device, val_data, val_probs=None, pool_size=-1,
+                             batch_size, num_workers, model, device, val_data, ffcv_loader=None, dataset_name= None, val_probs=None, pool_size=-1,
                              score_fn='MC', calibration=True, addcal=False, noise=0.0):
   distribution = np.array(distribution)
   num_to_sample = [round(i) for i in (distribution * query_size)]
@@ -374,8 +383,14 @@ def sample_from_distribution(distribution, dataset, unlabeled_mask, query_size, 
     else:
       subset_idx = candidate_idx
     pool_data = WILDSSubset(dataset, subset_idx, transform=None)
-    pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
-
+    if ffcv_loader == 'ffcv': 
+      # loader_args = {**ffcv_loader._args}
+      # loader_args['indices'] = subset_idx
+      # pool_loader = Loader(**loader_args)
+      pool_loader = ffcv_train_val_loader(dataset_name, indices=subset_idx, num_workers=num_workers, batch_size=batch_size, pin_memory=True)
+    else:
+      pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
+    
     print(f"Querying group {g} for {num_select} elements...")
     if query_strategy == 'random':
       sample_idx = random.sample(range(0, subset_idx.size), num_select)
@@ -384,14 +399,14 @@ def sample_from_distribution(distribution, dataset, unlabeled_mask, query_size, 
     elif query_strategy == 'least_confidence':
       sample_idx = least_confidence_query(model, device, pool_loader, num_select, calibrator=calibrator, noise=noise)
     elif query_strategy == 'threshold':
-      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, num_select, batch_size, num_workers, val_probs=val_probs, 
-                                  score_fn=score_fn, calibration=calibration)
+      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, num_select, batch_size, num_workers, 
+                                  pool_loader=pool_loader, val_probs=val_probs, score_fn=score_fn, calibration=calibration)
     elif query_strategy == 'threshold_spec':
       val_group = grouper.metadata_to_group(val_data.metadata_array)
       val_group = val_group.cpu().numpy()
       val_group_idx = np.nonzero(val_group == g)[0]
-      sample_idx = threshold_query(model, device, pool_data, WILDSSubset(val_data, val_group_idx, transform=None), grouper, num_select, batch_size, num_workers, val_probs=val_probs[val_group_idx],
-                                  score_fn=score_fn, calibration=calibration)
+      sample_idx = threshold_query(model, device, pool_data, WILDSSubset(val_data, val_group_idx, transform=None), grouper, num_select, batch_size, num_workers, 
+                                  pool_loader=pool_loader, val_probs=val_probs[val_group_idx], score_fn=score_fn, calibration=calibration)
     else:
       sample_idx = query(model, device, pool_loader, num_select, query_strategy=query_strategy)
     
@@ -415,15 +430,15 @@ Arguments:
                            otherwise defaults to 'random'
 - pool_size (int): when > 0, the size of the randomly selected pool from the unlabeled_loader to consider
                    (otherwise defaults to considering all of the associated data)
-- batch_size (int): default=8
-- num_workers (int): default=2
+- batch_size (int): default=128
+- num_workers (int): default=8
 
 Modifies:
 - dataset: edits the labels of samples that have been queried; updates dataset.unlabeled_mask
 '''
 
 def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, query_size,
-                     val_probs=None, sample_distribution=None, exclude=None, include=None, 
+                     ffcv_loader=None, dataset_name=None, val_probs=None, sample_distribution=None, exclude=None, include=None, 
                      group_strategy=None, p=0.5, wg=None, query_strategy='least_confidence', 
                      score_fn='MC', calibration=True, addcal=False, noise=0.0,
                      group_losses=None, group_acc=None,
@@ -461,7 +476,8 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     if sample_distribution is not None:
       print(f"sample distribution is {sample_distribution}")
       selected_idx = sample_from_distribution(sample_distribution, dataset, unlabeled_mask, query_size, grouper, query_strategy, 
-                                              batch_size, num_workers, model, device, val_data, val_probs=val_probs, pool_size=pool_size,
+                                              batch_size, num_workers, model, device, val_data, 
+                                              ffcv_loader=ffcv_loader, dataset_name=dataset_name, val_probs=val_probs, pool_size=pool_size,
                                               score_fn=score_fn, calibration=calibration, addcal=addcal, noise=noise)
       unlabeled_mask[selected_idx] = 0
       return selected_idx
@@ -483,13 +499,13 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     candidate_mask = candidate_mask * mask
     
     # sample according to group_strategy 
-    group_idx = np.arange(len(dataset)) #used for creating group_mask, group_mask[group_idx] is set to 1; default is the entire dataset(no group_strategy)
+    group_idx = np.arange(len(dataset)) # used for creating group_mask, group_mask[group_idx] is set to 1; default is the entire dataset(no group_strategy)
     if group_strategy is not None:
       assert wg != None and wg in range(num_group), "For group strategy != None, a valid worst group is needed"
       group_idx = np.nonzero(group == wg)[0]
     group_mask = np.zeros(len(dataset))
     group_mask[group_idx] = 1
-    unlabeled_idx = np.nonzero(candidate_mask * group_mask)[0] #indices of datapoints available for sampling
+    unlabeled_idx = np.nonzero(candidate_mask * group_mask)[0] # indices of datapoints available for sampling
     print("Number of selected unlabeled samples: {}, wg is {}".format(len(unlabeled_idx), wg))
 
     selected_idx = None
@@ -508,8 +524,14 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     else:
       subset_idx = unlabeled_idx
     pool_data = WILDSSubset(dataset, subset_idx, transform=None)
-    pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
-    
+    if ffcv_loader == 'ffcv':
+      # loader_args = {**ffcv_loader._args}
+      # loader_args['indices'] = subset_idx
+      # pool_loader = Loader(**loader_args)
+      pool_loader = ffcv_train_val_loader(dataset_name, dataset=dataset, indices=subset_idx, num_workers=num_workers, batch_size=batch_size, pin_memory=True)
+    else:
+      pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
+      
     if addcal:
       calibrator = cal.TempScaling(bias=False)
       calibrator.fit(val_probs.cpu().numpy(), val_data.y_array.cpu().numpy())
@@ -522,13 +544,17 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     elif query_strategy == 'least_confidence':
       sample_idx = least_confidence_query(model, device, pool_loader, query_size, calibrator=calibrator, noise=noise)
     elif query_strategy == 'threshold':
-      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, val_probs=val_probs, score_fn=score_fn, calibration=calibration)
+      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, 
+                                  pool_loader=pool_loader, val_probs=val_probs, score_fn=score_fn, calibration=calibration)
     elif query_strategy == 'threshold_group':
-      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, val_probs=val_probs, group_balance=True, score_fn=score_fn, calibration=calibration)
+      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, 
+                                  pool_loader=pool_loader, val_probs=val_probs, group_balance=True, score_fn=score_fn, calibration=calibration)
     elif query_strategy == 'threshold_spec':
-      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, val_probs=val_probs, group_spec=True, score_fn=score_fn, calibration=calibration)
+      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, 
+                                  pool_loader=pool_loader, val_probs=val_probs, group_spec=True, score_fn=score_fn, calibration=calibration)
     elif query_strategy == 'threshold_group_spec':
-      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, val_probs=val_probs, group_balance=True, group_spec=True, score_fn=score_fn, calibration=calibration)
+      sample_idx = threshold_query(model, device, pool_data, val_data, grouper, query_size, batch_size, num_workers, 
+                                  pool_loader=pool_loader, val_probs=val_probs, group_balance=True, group_spec=True, score_fn=score_fn, calibration=calibration)
     elif query_strategy == 'random':
       sample_idx = random.sample(range(0, subset_idx.size), query_size)
     else:
@@ -543,7 +569,6 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     unlabeled_mask[selected_idx] = 0
     
     return selected_idx
-
 
 # From https://github.com/google-research/big_transfer.git bit_hyperrule.py
 def get_schedule(dataset_size):
