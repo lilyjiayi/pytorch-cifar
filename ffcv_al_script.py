@@ -71,9 +71,10 @@ def main():
     parser.add_argument('--dataset', default='celebA', type=str, choices=['waterbirds', 'celebA', 'domainnet', 'geo_yfcc', 'imagenet', 'yfcc_imagenet', 'combined_imagenet']) 
     parser.add_argument('--use_four', action='store_true',
                         help='for domainnet dataset, only use "clipart", "painting", "real", "sketch"')
+    parser.add_argument('--imagenet100', default=None, type=str, help='for combined_imagenet dataset, use 100-class class-uniform training distribution, option: imagenet, yfcc') 
     parser.add_argument('--use_sentry', action='store_true',
                         help='for domainnet dataset, use sentry version')
-    parser.add_argument('--frac', default=None, type=float, help='frac of val data to use')
+    parser.add_argument('--frac', default=None, type=float, help='fraction of val data to use')
     parser.add_argument('--val_size', default=None, type=int, help='size for group-uniform validation set')
     parser.add_argument('--root_dir', default="/self/scr-sync/nlp", type=str, help='root dir for accessing dataset') 
     # wandb params
@@ -262,12 +263,12 @@ def main():
         val_idx = np.random.choice(range(len(raw_val_data)), round(args.frac*len(raw_val_data)), replace=False)
         val_data = WILDSSubset(raw_val_data, val_idx, transform=None)
     else:
-        # val_idx = np.arange(len(raw_val_data))
-        # val_data = raw_val_data
-
-        # for testing difference between imagenet and yfcc_imagenet
-        val_idx = np.load("./imagenet_yfcc_compare/combined_val.npy")
-        val_idx = val_idx.astype(int)
+        val_idx = np.arange(len(raw_val_data))
+        val_data = raw_val_data
+    
+    if args.imagenet100 is not None: 
+        # use 10k+10k class-uniform validation set
+        val_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/combined_val.npy").astype(int)
         val_data = WILDSSubset(raw_val_data, val_idx, transform=None)
 
     # print out info of val set
@@ -295,11 +296,7 @@ def main():
     curr_wg = None
     curr_test_acc = None
     train_idx = None
-
     unlabeled_mask = np.ones(len(train_data)) # We assume that in the beginning, the entire train set is unlabeled
-    if args.dataset == 'combined_imagenet': # for combined imagenet dataset, training and validation data share the same beton file 
-        # exclude the samples set as validation data
-        unlabeled_mask[val_idx] = 0
 
     num_classes = train_data.n_classes  # number of classes in the classification problem
     print(f"num_classes is {num_classes}")
@@ -310,6 +307,22 @@ def main():
     test = get_test(args.dataset)
     
     criterion = nn.CrossEntropyLoss(reduction = 'none')
+
+    if args.dataset == 'combined_imagenet': # for combined imagenet dataset, training and validation data share the same beton file 
+        # exclude the samples set as validation data
+        unlabeled_mask[val_idx] = 0
+        # check if to use 100-class imagenet
+        if args.imagenet100 is not None:
+            unlabeled_mask = np.zeros(len(train_data))
+            imagenet_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/imagenet_train.npy").astype(int)
+            yfcc_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/yfcc_train.npy").astype(int)
+            if args.imagenet100 == 'imagenet':
+                unlabeled_mask[imagenet_idx] = 1
+            elif args.imagenet100 == 'yfcc':
+                unlabeled_mask[yfcc_idx] = 1
+            elif args.imagenet100 == 'combined':
+                unlabeled_mask[imagenet_idx] = 1
+                unlabeled_mask[yfcc_idx] = 1
 
     if args.resume:
         # Load checkpoint.
@@ -378,15 +391,28 @@ def main():
                 distribution = [float(i) for i in raw_prob]
                 distribution = np.array(distribution)
                 assert distribution.size == num_groups, "Distribution needs to have correct number of groups"
-            # idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
-            #                     sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
-            #                     replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
             
-            # for testing difference between imagenet and yfcc_imagenet
-            idx = np.load("./imagenet_yfcc_compare/yfcc_train.npy")
-            # idx = np.load("./imagenet_yfcc_compare/imagenet_train.npy")
-            idx = idx.astype(int)
-            unlabeled_mask[idx] = 0
+            # if args.compare_imagenet is None: 
+            #     idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
+            #                             sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
+            #                             replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
+            # else:
+            #     if args.compare_imagenet == 'imagenet':
+            #         idx = np.load("./imagenet_yfcc_compare/imagenet_train.npy")
+            #     elif args.compare_imagenet == 'yfcc':
+            #         idx = np.load("./imagenet_yfcc_compare/yfcc_train.npy")
+            #     idx = idx.astype(int)
+            #     unlabeled_mask[idx] = 0
+            
+            idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
+                                sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
+                                replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
+            
+            # # for testing difference between imagenet and yfcc_imagenet
+            # idx = np.load("./imagenet_yfcc_compare/yfcc_train.npy")
+            # # idx = np.load("./imagenet_yfcc_compare/imagenet_train.npy")
+            # idx = idx.astype(int)
+            # unlabeled_mask[idx] = 0
 
             _,_,_ = log_selection(idx, train_val_data, 
                                  grouper, full_grouper, label_grouper,                                                                        
