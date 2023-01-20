@@ -2,6 +2,28 @@
 
 Active Learning methods on celebA, domainnet, and geo-yfcc
 
+## For combined_imagenet FFCV training 
+```
+conda activate jl_ffcv
+
+# Train on 100-class yfcc_imagenet (100k), no active learning 
+python ffcv_al_script.py --num_workers 8 --batch_size 256 --dataset combined_imagenet --imagenet100 yfcc --loader ffcv --model resnet18 --frac 0.01 --drop_last --iweight_decay 5e-5 --weight_decay 5e-5 --inum_epoch 100 --num_epoch 100 --ilr 0.5 --lr 0.5  --ischedule one_cycle --schedule one_cycle --new_model --save_every 2 --seed_size 100000 --pool_size 100000 --query_size 10000 --num_queries 0 --group_div standard --query_strategy random
+
+# Train on 100-class imagenet (100k), no active learning 
+python ffcv_al_script.py --num_workers 8 --batch_size 256 --dataset combined_imagenet --imagenet100 imagenet --loader ffcv --model resnet18 --frac 0.01 --drop_last --iweight_decay 5e-5 --weight_decay 5e-5 --inum_epoch 100 --num_epoch 100 --ilr 0.5 --lr 0.5  --ischedule one_cycle --schedule one_cycle --new_model --save_every 2 --seed_size 100000 --pool_size 100000 --query_size 10000 --num_queries 0 --group_div standard --query_strategy random
+
+# Train on 100-class combined_imagenet (200k), no active learning 
+python ffcv_al_script.py --num_workers 8 --batch_size 256 --dataset combined_imagenet --imagenet100 combined --loader ffcv --model resnet18 --frac 0.01 --drop_last --iweight_decay 5e-5 --weight_decay 5e-5 --inum_epoch 100 --num_epoch 100 --ilr 0.5 --lr 0.5  --ischedule one_cycle --schedule one_cycle --new_model --save_every 2 --seed_size 200000 --pool_size 100000 --query_size 10000 --num_queries 0 --group_div standard --query_strategy random
+
+# We can also train active learning loop on 100-class data, just need to make sure there are enough samples
+python ffcv_al_script.py --num_workers 8 --batch_size 256 --dataset combined_imagenet --imagenet100 combined --loader ffcv --model resnet18 --frac 0.01 --drop_last --iweight_decay 5e-5 --weight_decay 5e-5 --inum_epoch 100 --num_epoch 100 --ilr 0.5 --lr 0.5  --ischedule one_cycle --schedule one_cycle --new_model --save_every 2 --seed_size 25000 --pool_size 50000 --query_size 10000 --num_queries 20 --group_div standard --query_strategy random
+
+# Train on original combined_imagnet, active learning loop
+python ffcv_al_script.py --num_workers 8 --batch_size 256 --dataset combined_imagenet --loader ffcv --model resnet18 --frac 0.01 --drop_last --iweight_decay 5e-5 --weight_decay 5e-5 --inum_epoch 1 --num_epoch 1 --ilr 0.5 --lr 0.5  --ischedule one_cycle --schedule one_cycle --new_model --save_every 2 --seed_size 100000 --pool_size 100000 --query_size 10000 --num_queries 20 --group_div standard --query_strategy random
+```
+
+
+
 ## For FFCV compatible training
 ```
 conda activate jl_ffcv
@@ -19,7 +41,7 @@ python ffcv_al.py --dataset geo_yfcc --frac 0.1 \
 ## Prerequisites
 #conda env created in the public conda directory
 
-conda activate jiayili_al
+conda activate jl_ffcv
 
 ## Training
 ```
