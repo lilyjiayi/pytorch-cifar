@@ -392,27 +392,9 @@ def main():
                 distribution = np.array(distribution)
                 assert distribution.size == num_groups, "Distribution needs to have correct number of groups"
             
-            # if args.compare_imagenet is None: 
-            #     idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
-            #                             sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
-            #                             replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
-            # else:
-            #     if args.compare_imagenet == 'imagenet':
-            #         idx = np.load("./imagenet_yfcc_compare/imagenet_train.npy")
-            #     elif args.compare_imagenet == 'yfcc':
-            #         idx = np.load("./imagenet_yfcc_compare/yfcc_train.npy")
-            #     idx = idx.astype(int)
-            #     unlabeled_mask[idx] = 0
-            
             idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
                                 sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
                                 replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
-            
-            # # for testing difference between imagenet and yfcc_imagenet
-            # idx = np.load("./imagenet_yfcc_compare/yfcc_train.npy")
-            # # idx = np.load("./imagenet_yfcc_compare/imagenet_train.npy")
-            # idx = idx.astype(int)
-            # unlabeled_mask[idx] = 0
 
             _,_,_ = log_selection(idx, train_val_data, 
                                  grouper, full_grouper, label_grouper,                                                                        
