@@ -118,9 +118,12 @@ def main():
     args = parser.parse_args()
     
     # if using standard pytorch dataloaders, disable multithreading to prevent deadlocks
-    # if args.loader == 'standard':
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+    if args.loader == 'standard':
+        os.environ["OMP_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
+    
+    # set cudnn
+    torch.backends.cudnn.benchmark = True
 
     # set default drop_last flag to True
     args.drop_last = True
