@@ -650,7 +650,7 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
         lr = scheduler.get_last_lr()[0]
         probs = F.softmax(outputs, dim=1)
         probabilities = torch.cat((probabilities, probs))
-        wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
+        # wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
         
         # loss.backward()
         scaler.scale(loss).backward()
@@ -668,7 +668,7 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
         progress_bar(batch_idx, len(dataloader), 'Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
                     % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
 
-    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total})
+    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total, "train/lr": lr})
     
     # if the current epoch is the last of the query round 
     if query_end:
@@ -760,7 +760,7 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
         lr = scheduler.get_last_lr()[0]
         probs = F.softmax(outputs, dim=1)
         probabilities = torch.cat((probabilities, probs))
-        wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
+        # wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
         
         # loss.backward()
         scaler.scale(loss).backward()
@@ -778,7 +778,7 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
         progress_bar(batch_idx, len(dataloader), 'Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
                      % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
 
-    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total})
+    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total, "train/lr": lr})
     
     # if the current epoch is the last of the query round 
     if query_end:
