@@ -271,7 +271,8 @@ def main():
     
     if args.imagenet100 is not None: 
         # use 10k+10k class-uniform validation set
-        val_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/combined_val.npy").astype(int)
+        # val_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/combined_val.npy").astype(int)
+        val_idx = np.load("./imagenet_yfcc_compare/combined_val_random10.npy").astype(int)
         val_data = WILDSSubset(raw_val_data, val_idx, transform=None)
 
     # print out info of val set
@@ -317,8 +318,10 @@ def main():
         # check if to use 100-class imagenet
         if args.imagenet100 is not None:
             unlabeled_mask = np.zeros(len(train_data))
-            imagenet_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/imagenet_train.npy").astype(int)
-            yfcc_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/yfcc_train.npy").astype(int)
+            # imagenet_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/imagenet_train.npy").astype(int)
+            # yfcc_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/yfcc_train.npy").astype(int)
+            imagenet_idx = np.load("./imagenet_yfcc_compare/imagenet_train_random10.npy").astype(int)
+            yfcc_idx = np.load("./imagenet_yfcc_compare/yfcc_train_random10.npy").astype(int)
             if args.imagenet100 == 'imagenet':
                 unlabeled_mask[imagenet_idx] = 1
             elif args.imagenet100 == 'yfcc':
