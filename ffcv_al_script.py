@@ -22,6 +22,7 @@ from torchvision.utils import save_image
 import time
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from ffcv.pipeline.operation import Operation
 from ffcv.loader import Loader, OrderOption
@@ -37,7 +38,6 @@ from wilds.common.grouper import CombinatorialGrouper
 
 from al_utils import query_the_oracle, get_lr, sample_from_distribution
 from models import *
-from utils import progress_bar
 
 import wandb
 
@@ -635,7 +635,9 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
     losses = torch.tensor([]).to(device)
     y_array = torch.tensor([]).to(device)
     meta_array = torch.tensor([]).to(device)
-    for batch_idx, (inputs, targets) in enumerate(dataloader):
+    
+    progress_loader = tqdm(dataloader)
+    for batch_idx, (inputs, targets) in enumerate(progress_loader):
         step += 1
         # dataloader does not contain metadata, set default metadata to y labels
         metadata = targets
@@ -649,11 +651,11 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
             outputs = net(inputs)
             raw_loss = criterion(outputs, targets)
             loss = torch.sum(raw_loss) / batch_size
-        losses = torch.cat((losses, raw_loss))
+        losses = torch.cat((losses, raw_loss.detach()))
         lr = scheduler.get_last_lr()[0]
         probs = F.softmax(outputs, dim=1)
         probabilities = torch.cat((probabilities, probs))
-        # wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
+        wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
         
         # loss.backward()
         scaler.scale(loss).backward()
@@ -668,10 +670,10 @@ def train_imagenet(scaler, epoch, step, net, dataloader, batch_size, data_size, 
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        progress_bar(batch_idx, len(dataloader), 'Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                    % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+        progress_loader.set_postfix_str('Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                                        % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
 
-    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total, "train/lr": lr})
+    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total})
     
     # if the current epoch is the last of the query round 
     if query_end:
@@ -695,8 +697,10 @@ def test_imagenet(epoch, net, dataloader, criterion, device, query_end, curr_que
     num_samples = 0
     probabilities = torch.tensor([]).to(device)
     losses = torch.tensor([]).to(device)
+    
+    progress_loader = tqdm(dataloader)
     with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(dataloader):
+        for batch_idx, (inputs, targets) in enumerate(progress_loader):
             metadata = targets
             inputs, targets = inputs.to(device), targets.to(device)
             targets = targets.reshape(-1)
@@ -717,8 +721,9 @@ def test_imagenet(epoch, net, dataloader, criterion, device, query_end, curr_que
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            progress_bar(batch_idx, len(dataloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                        % (test_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+            progress_loader.set_postfix_str('Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                                            % (test_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+    
     wandb.log({"general/epoch": epoch, "val/epoch_loss": test_loss/len(dataloader), "val/test_acc":100.*correct/total})
 
     # if the current epoch is the last of the query round 
@@ -743,7 +748,9 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
     losses = torch.tensor([]).to(device)
     y_array = torch.tensor([]).to(device)
     meta_array = torch.tensor([]).to(device)
-    for batch_idx, (inputs, targets, metadata) in enumerate(dataloader):
+    
+    progress_loader = tqdm(dataloader)
+    for batch_idx, (inputs, targets, metadata) in enumerate(progress_loader):
         step += 1
         # For specific lr scheduling defined in al_utils.py
         # lr = get_lr(step, data_size, args.lr)
@@ -759,11 +766,11 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
             outputs = net(inputs)
             raw_loss = criterion(outputs, targets)
             loss = torch.sum(raw_loss) / batch_size
-        losses = torch.cat((losses, raw_loss))
+        losses = torch.cat((losses, raw_loss.detach()))
         lr = scheduler.get_last_lr()[0]
         probs = F.softmax(outputs, dim=1)
         probabilities = torch.cat((probabilities, probs))
-        # wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
+        wandb.log({"general/epoch": epoch, "train/train_step_loss":loss.item(), "train/lr": lr})
         
         # loss.backward()
         scaler.scale(loss).backward()
@@ -778,10 +785,10 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        progress_bar(batch_idx, len(dataloader), 'Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                     % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+        progress_loader.set_postfix_str('Learning rate: %.6f | Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                                        % (lr, train_loss/(batch_idx + 1), 100.*correct/total, correct, total))
 
-    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total, "train/lr": lr})
+    wandb.log({"general/epoch": epoch, "train/train_epoch_loss": train_loss/len(dataloader), "train/train_acc":100.*correct/total})
     
     # if the current epoch is the last of the query round 
     if query_end:
@@ -805,8 +812,10 @@ def test_loop(epoch, net, dataloader, criterion, device, query_end, curr_query):
     num_samples = 0
     probabilities = torch.tensor([]).to(device)
     losses = torch.tensor([]).to(device)
+    
+    progress_loader = tqdm(dataloader)
     with torch.no_grad():
-        for batch_idx, (inputs, targets, metadata) in enumerate(dataloader):
+        for batch_idx, (inputs, targets, metadata) in enumerate(progress_loader):
             inputs, targets = inputs.to(device), targets.to(device)
             # targets = targets.reshape(-1)
             num_samples += inputs.size()[0]
@@ -827,8 +836,9 @@ def test_loop(epoch, net, dataloader, criterion, device, query_end, curr_query):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            progress_bar(batch_idx, len(dataloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                         % (test_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+            progress_loader.set_postfix_str('Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                                            % (test_loss/(batch_idx + 1), 100.*correct/total, correct, total))
+
     wandb.log({"general/epoch": epoch, "val/epoch_loss":test_loss/len(dataloader), "val/test_acc":100.*correct/total})
 
     # if the current epoch is the last of the query round 
