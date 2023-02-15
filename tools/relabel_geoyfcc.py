@@ -108,7 +108,7 @@ imagenet21k_metadata['definition'] = imagenet21k_metadata.mapply(lambda row: en.
 # In[9]:
 
 
-tokenizer = open_clip.get_tokenizer('ViT-B-32')
+tokenizer = open_clip.get_tokenizer('ViT-bigG-14')
 
 
 # In[10]:
