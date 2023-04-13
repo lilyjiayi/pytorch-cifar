@@ -6,3 +6,5 @@
 !**/*.yml
 !**/*.py
 !**/*.ipynb
+!metric_prediction/
+!metric_prediction/*
