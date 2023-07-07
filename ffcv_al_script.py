@@ -1,6 +1,7 @@
 # to prevent multiprocess deadlock
 import os
 from ssl import OP_ENABLE_MIDDLEBOX_COMPAT
+# from types import NoneType
 
 '''Active learning with PyTorch.'''
 import argparse
@@ -71,12 +72,26 @@ def main():
     parser.add_argument('--dataset', default='celebA', type=str, choices=['waterbirds', 'celebA', 'domainnet', 'geo_yfcc', 'imagenet', 'yfcc_imagenet', 'combined_imagenet']) 
     parser.add_argument('--use_four', action='store_true',
                         help='for domainnet dataset, only use "clipart", "painting", "real", "sketch"')
-    parser.add_argument('--imagenet100', default=None, type=str, help='for combined_imagenet dataset, use 100-class class-uniform training distribution, option: imagenet, yfcc') 
+    parser.add_argument('--imagenet100', default=None, type=str, help='for combined_imagenet dataset, use 100-class class-uniform training distribution',
+                        choices=['imagenet', 'yfcc', 'combined']) 
     parser.add_argument('--use_sentry', action='store_true',
                         help='for domainnet dataset, use sentry version')
+    parser.add_argument('--subsampled', action='store_true',
+                        help='use unbalanced domainnet sentry')
+    parser.add_argument('--use_40_class', action='store_true',
+                        help='subsample 40 class in domainnet six to align with domainnet sentry')
+    parser.add_argument('--use_binary', default=None, type=str, choices = ['animal', 'animal/plant'],
+                        help='for domainnet dataset, use binary labels, choose animal or animal/plant')
+    parser.add_argument('--geoyfcc_num_class', default=500, type=int, help='three versions of geoyfcc, 45/350/500 classes')
+    parser.add_argument('--superclass', default=-1, type=int, help='use superclassed geoyfcc')
+    parser.add_argument('--drop_africa', action='store_true',
+                        help='drop africa group for geoyfcc dataset')
     parser.add_argument('--frac', default=None, type=float, help='fraction of val data to use')
     parser.add_argument('--val_size', default=None, type=int, help='size for group-uniform validation set')
     parser.add_argument('--root_dir', default="/self/scr-sync/nlp", type=str, help='root dir for accessing dataset') 
+    parser.add_argument('--include', default=None, type=str, help='only include certain groups for training set')
+    parser.add_argument('--include_counts', default=None, type=str, help='define number of samples from each groups to include for training set')
+
     # wandb params
     parser.add_argument('--wandb_group', default=None, type=str)
     parser.add_argument('--wandb_name', default=None, type=str)
@@ -105,7 +120,7 @@ def main():
     parser.add_argument('--addcal', action='store_true', help='add calibration when doing uncertainty sampling')
     parser.add_argument('--noise', default=0.0, type=float)
     parser.add_argument('--group_strategy', default=None, type=str, 
-                        choices=['oracle', 'avg_c_val', 'min', 'avg_c_train', 'label_oracle_full', 'uniform', 'loss_proportional', 'error_proportional', 'loss_exp', 'interpolate'])
+                        choices=['ambient', 'oracle', 'avg_c_val', 'min', 'avg_c_train', 'label_oracle_full', 'uniform', 'loss_prop', 'error_prop', 'loss_exp', 'interpolate'])
     parser.add_argument('--alpha', default=0.5, type=float, help='weight to interpolate between uniform and worst group')
     parser.add_argument('--group_div', default='standard', type=str, choices=['standard', 'full', 'label']) # which group division to query
     parser.add_argument('--log_op', default=None, type=str, choices=['cal', 'log', 'no_log'], help='cal/log: whether to calculate/log full/label group info, standard group info is not affected; \
@@ -139,7 +154,7 @@ def main():
     # wandb log code
     def include_fn(path):
         include = False
-        include_files = ["al.py", "al_utils.py", "ffcv_al_script.py", "ffcv_dataloader.py"]
+        include_files = ["al.py", "al_utils.py", "ffcv_al_script.py", "ffcv_dataloader.py", 'run_expt.py']
         for f in include_files:
             if path.endswith(f): include = True
         return include
@@ -171,14 +186,17 @@ def main():
     # Load the full dataset, and download it if necessary
     args.root_dir = f'/self/scr-sync/nlp/{args.dataset}'
     if args.dataset == 'geo_yfcc':
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = args.root_dir)
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = args.root_dir, num_class = args.geoyfcc_num_class, superclass = args.superclass, distribution = args.include)
+        # small_val_idx = np.random.choice(range(len(raw_val_data)), round(0.25*len(raw_val_data)), replace=False)
+        # small_val_data = WILDSSubset(raw_val_data, small_val_idx, transform=None)
+        # small_val_loader = get_eval_loader("standard", small_val_data, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=pin_memory)
     elif args.dataset == 'celebA':
         target = 'Male'
         group = ['Black_Hair','Wavy_Hair']
         dataset = get_dataset(dataset=args.dataset, download=True, root_dir = args.root_dir, target=target, group=group)
         wandb.config.update({'target': target, 'group': group})
     elif args.dataset == 'domainnet':   
-        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = args.root_dir, use_four=args.use_four, use_sentry=args.use_sentry) 
+        dataset = get_dataset(dataset=args.dataset, download=False, root_dir = args.root_dir, use_four=args.use_four, use_sentry=args.use_sentry, subsampled=args.subsampled, use_40_class=args.use_40_class, use_binary=args.use_binary) 
     elif args.dataset == 'waterbirds':
         dataset = get_dataset(dataset=args.dataset, download=True, root_dir = args.root_dir)
     elif args.dataset == 'imagenet':
@@ -193,9 +211,9 @@ def main():
 
     # Create Grouper
     if args.dataset == 'geo_yfcc':
-        grouper = CombinatorialGrouper(dataset, ['country'])
+        grouper = CombinatorialGrouper(dataset, ['continent'])
         label_grouper = CombinatorialGrouper(dataset, ['y'])
-        full_grouper = CombinatorialGrouper(dataset, ['country', 'y'])
+        full_grouper = CombinatorialGrouper(dataset, ['continent', 'y'])
     elif args.dataset == 'celebA':
         grouper = CombinatorialGrouper(dataset, dataset.metadata_fields[:-2])
         label_grouper = CombinatorialGrouper(dataset, ['y'])
@@ -228,11 +246,36 @@ def main():
 
     # Get data splits
     train_data, train_val_data, raw_val_data = get_data_splits(args.dataset, dataset)
-    print('Train set size: ', len(train_data))
+    
+    # include_count = None
+    # group, group_counts = query_grouper.metadata_to_group(train_data.metadata_array, return_counts=True)
+    # group = np.asarray(group.cpu())
+    # num_groups = np.array(group_counts).size
+    # if args.include is not None:
+    #     include_mask = args.include.split(',')
+    #     include_mask = np.array([int(i) for i in include_mask])
+    #     include_count = include_mask * group_counts
+    # elif args.include_counts is not None:
+    #     include = args.include_counts.split(',')
+    #     print(include)
+    #     include_count = np.array([int(i) for i in include])
+    # if include_count is not None:    
+    #     selection_idx = []
+    #     for i in range(num_groups):
+    #         if include_count[i] > 0:
+    #             idx = np.nonzero(group == i)[0]
+    #             sampled = np.random.choice(idx, size=include_count[i], replace = False)
+    #             selection_idx.append(sampled)
+    #     selection_idx = np.concatenate(selection_idx)
+    #     train_data = WILDSSubset(train_data, selection_idx, transform=None)
+    #     train_val_data = WILDSSubset(train_val_data, selection_idx, transform=None)
+
+    # print('Train set size: ', len(train_data))
+    # train_counts,_,_ = log_selection(np.arange(len(train_val_data)), train_val_data, 
+    #                       grouper, full_grouper, label_grouper,                                                                        
+    #                       0, 'data_train', args.log_op)
+    # train_data_prop = train_counts/np.sum(train_counts)
     print('Raw Eval set size: ', len(raw_val_data))
-    _,_,_ = log_selection(np.arange(len(train_val_data)), train_val_data, 
-                          grouper, full_grouper, label_grouper,                                                                        
-                          0, 'data_train', args.log_op)
     counts, counts_full, counts_label = log_selection(np.arange(len(raw_val_data)), raw_val_data, 
                           grouper, full_grouper, label_grouper,                                                                        
                           0, 'raw_data_val', args.log_op)
@@ -272,7 +315,7 @@ def main():
     if args.imagenet100 is not None: 
         # use 10k+10k class-uniform validation set
         # val_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/combined_val.npy").astype(int)
-        val_idx = np.load("./imagenet_yfcc_compare/combined_val_random10.npy").astype(int)
+        val_idx = np.load("./imagenet_yfcc_compare/combined_val_10.npy").astype(int)
         val_data = WILDSSubset(raw_val_data, val_idx, transform=None)
 
     # print out info of val set
@@ -302,6 +345,40 @@ def main():
     train_idx = None
     unlabeled_mask = np.ones(len(train_data)) # We assume that in the beginning, the entire train set is unlabeled
 
+    selection_idx = []
+    group, group_counts = query_grouper.metadata_to_group(train_data.metadata_array, return_counts=True)
+    group = np.asarray(group.cpu())
+    num_groups = np.array(group_counts).size
+    include_group = None
+    if args.include is not None:
+        include_mask = args.include.split(',')
+        include_mask = np.array([int(i) for i in include_mask])
+        include_group = []
+        for i in range(num_groups):
+            if include_mask[i] > 0:
+                include_group.append(i)
+                idx = np.nonzero(group == i)[0]
+                selection_idx.append(idx)
+    elif args.include_counts is not None:
+        include = args.include_counts.split(',')
+        include_count = np.array([int(i) for i in include])
+        for i in range(num_groups):
+            if include_count[i] > 0:
+                idx = np.nonzero(group == i)[0]
+                sampled = np.random.choice(idx, size=include_count[i], replace = False)
+                selection_idx.append(sampled)
+    if len(selection_idx) > 0:
+        selection_idx = np.concatenate(selection_idx)
+        unlabeled_mask = np.zeros(len(train_data))
+        unlabeled_mask[selection_idx] = 1
+    
+    print('Train set size: ', len(np.nonzero(unlabeled_mask)[0]))
+    train_counts,_,_ = log_selection(np.nonzero(unlabeled_mask)[0], train_val_data, 
+                          grouper, full_grouper, label_grouper,                                                                        
+                          0, 'data_train', args.log_op)
+    train_data_prop = train_counts/np.sum(train_counts)
+
+    
     num_classes = train_data.n_classes  # number of classes in the classification problem
     print(f"num_classes is {num_classes}")
     net = make_model(args.model, num_classes=num_classes, pretrained=args.pretrain)
@@ -320,8 +397,8 @@ def main():
             unlabeled_mask = np.zeros(len(train_data))
             # imagenet_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/imagenet_train.npy").astype(int)
             # yfcc_idx = np.load("/nlp/scr-sync/nlp/combined_imagenet_ffcv/imagenet_yfcc_compare/yfcc_train.npy").astype(int)
-            imagenet_idx = np.load("./imagenet_yfcc_compare/imagenet_train_random10.npy").astype(int)
-            yfcc_idx = np.load("./imagenet_yfcc_compare/yfcc_train_random10.npy").astype(int)
+            imagenet_idx = np.load("./imagenet_yfcc_compare/imagenet_train_10.npy").astype(int)
+            yfcc_idx = np.load("./imagenet_yfcc_compare/yfcc_train_10.npy").astype(int)
             if args.imagenet100 == 'imagenet':
                 unlabeled_mask[imagenet_idx] = 1
             elif args.imagenet100 == 'yfcc':
@@ -350,10 +427,17 @@ def main():
                                                                             grouper, full_grouper, label_grouper,                                                                        
                                                                             curr_query, 'selection_accumulating', args.log_op)
         
+        print('Train set size: ', len(np.nonzero(unlabeled_mask)[0]))
+        train_counts,_,_ = log_selection(np.nonzero(unlabeled_mask)[0], train_val_data, 
+                            grouper, full_grouper, label_grouper,                                                                        
+                            0, 'data_train', args.log_op)
+        train_data_prop = train_counts/np.sum(train_counts)
+        
         curr_test_acc, val_probs, val_losses = test(epoch, net, val_loader, criterion, device, True, curr_query)
         wg, wg_full, wg_label, g_acc, g_scores, g_losses = log_group_metrics(val_data.y_array, val_data.metadata_array, val_probs, val_losses, 
                                                   device, args.log_op, epoch, curr_query, 
                                                   grouper, full_grouper, label_grouper, args.group_div, 'val_per_query')
+        wandb.log({"general/epoch": epoch, "general/curr_query": curr_query, "val_per_query/ambient_acc": np.inner(g_acc, train_data_prop)})
 
         # find worst group according to args.group_strategy and args.group_div
         curr_wg = find_target_group(args.group_strategy, args.group_div, val_probs, val_data.metadata_array, val_probs, val_data.metadata_array,
@@ -397,9 +481,10 @@ def main():
                 distribution = [float(i) for i in raw_prob]
                 distribution = np.array(distribution)
                 assert distribution.size == num_groups, "Distribution needs to have correct number of groups"
+
             
             idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.seed_size, ffcv_loader=args.loader, dataset_name=args.dataset,
-                                sample_distribution=distribution, group_strategy=None, exclude=exclude, wg=curr_wg, query_strategy='random', 
+                                sample_distribution=distribution, group_strategy=None, include=include_group, exclude=exclude, wg=curr_wg, query_strategy='random', 
                                 replacement=args.replacement, pool_size=0, batch_size=args.batch_size, num_workers = args.num_workers)
 
             _,_,_ = log_selection(idx, train_val_data, 
@@ -423,6 +508,10 @@ def main():
         optimizer = get_optimizer(args.optim, net, lr=args.ilr, momentum=0.9, weight_decay=args.iweight_decay)
         scheduler = init_optimizer_scheduler(args.ischedule, args.inum_epoch, train_loader, optimizer)
 
+        # small_val_idx = np.random.choice(range(len(raw_val_data)), round(0.25*len(raw_val_data)), replace=False)
+        # small_val_data = WILDSSubset(raw_val_data, small_val_idx, transform=None)
+        # small_val_loader = get_eval_loader("standard", small_val_data, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=pin_memory)
+
         # Pre-train on the initial subset
         for i in range(args.inum_epoch):
             query_end = (i==args.inum_epoch-1)
@@ -436,11 +525,16 @@ def main():
                 curr_test_acc, val_probs, val_losses = test(epoch, net, val_loader, criterion, device, False, curr_query)
                 log_group_metrics(val_data.y_array, val_data.metadata_array, val_probs, val_losses, device, args.log_op, 
                           epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, 'val')
+            # if not(query_end):
+            #     curr_test_acc, val_probs, val_losses = test(epoch, net, small_val_loader, criterion, device, False, curr_query)
+            #     log_group_metrics(small_val_data.y_array, small_val_data.metadata_array, val_probs, val_losses, device, args.log_op, 
+            #               epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, 'val')
             epoch += 1
             round_step += len(train_loader)
         curr_test_acc, val_probs, val_losses = test(epoch, net, val_loader, criterion, device, True, curr_query)
         wg, wg_full, wg_label, g_acc, g_scores, g_losses = log_group_metrics(val_data.y_array, val_data.metadata_array, val_probs, val_losses, device, args.log_op, 
                           epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, 'val_per_query')
+        wandb.log({"general/epoch": epoch, "general/curr_query": curr_query, "val_per_query/ambient_acc": np.inner(g_acc, train_data_prop)})
                           
        # find worst group according to args.group_strategy and args.group_div
         curr_wg = find_target_group(args.group_strategy, args.group_div, val_probs, val_data.metadata_array, train_probs, curr_meta_array,
@@ -462,7 +556,7 @@ def main():
 
         # Query the oracle for more labels
         idx = query_the_oracle(unlabeled_mask, net, device, train_val_data, val_data, query_grouper, args.query_size, ffcv_loader=args.loader, dataset_name=args.dataset,
-                               val_probs=val_probs, group_strategy=args.group_strategy, p=args.alpha, wg=curr_wg, query_strategy=args.query_strategy, 
+                               val_probs=val_probs, group_strategy=args.group_strategy, p=args.alpha, wg=curr_wg, include=include_group, query_strategy=args.query_strategy, 
                                group_losses=g_losses, group_acc=g_acc, score_fn=args.score_fn, calibration=(not args.nocal), addcal=args.addcal, noise=args.noise,
                                replacement=args.replacement, pool_size=args.pool_size, batch_size=args.batch_size, num_workers=args.num_workers)
         _,_,_ = log_selection(idx, train_val_data, 
@@ -518,6 +612,7 @@ def main():
 
         wg, wg_full, wg_label, g_acc, g_scores, g_losses = log_group_metrics(val_data.y_array, val_data.metadata_array, val_probs, val_losses, device, args.log_op, 
                                                     epoch, curr_query, grouper, full_grouper, label_grouper, args.group_div, 'val_per_query')
+        wandb.log({"general/epoch": epoch, "general/curr_query": curr_query, "val_per_query/ambient_acc": np.inner(g_acc, train_data_prop)})
                                                     
        
         # find worst group according to args.group_strategy and args.group_div
@@ -573,16 +668,27 @@ def get_data_splits(dataset_name, dataset):
     # Get the training and validation set (transform config from https://github.com/kohpangwei/group_DRO/blob/f7eae929bf4f9b3c381fae6b1b53ab4c6c911a0e/data/cub_dataset.py#L78-L102)
     scale = 256.0/224.0
     target_resolution = (224, 224)
+    if dataset_name == 'domainnet':
+        random_resized_crop = transforms.RandomResizedCrop(
+            target_resolution,
+            scale=(0.9, 1.0),
+            ratio=(0.75, 1.3333333333333333),
+            interpolation=transforms.InterpolationMode.BILINEAR)
+    else:
+        random_resized_crop = transforms.RandomResizedCrop(
+            target_resolution)
+
     train_transform = transforms.Compose([
         # RandomResizedCrop default: https://pytorch.org/vision/main/generated/torchvision.transforms.RandomResizedCrop.html
         # Reference for parameter selection: 
         # https://pytorch.org/vision/main/models/generated/torchvision.models.resnet50.html?highlight=resnet50#torchvision.models.resnet50
         # https://github.com/mlfoundations/open_clip/blob/db338b0bb36c15ae12fcd37e86120414903df1ef/src/open_clip/transform.py#L43
-        transforms.RandomResizedCrop(
-            target_resolution,
-            scale=(0.9, 1.0),
-            ratio=(0.75, 1.3333333333333333),
-            interpolation=transforms.InterpolationMode.BILINEAR),
+        # transforms.RandomResizedCrop(
+        #     target_resolution,
+        #     scale=(0.9, 1.0),
+        #     ratio=(0.75, 1.3333333333333333),
+        #     interpolation=transforms.InterpolationMode.BILINEAR),
+        random_resized_crop,
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -748,6 +854,7 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
     losses = torch.tensor([]).to(device)
     y_array = torch.tensor([]).to(device)
     meta_array = torch.tensor([]).to(device)
+    # target_test = None
     
     progress_loader = tqdm(dataloader)
     for batch_idx, (inputs, targets, metadata) in enumerate(progress_loader):
@@ -761,6 +868,10 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
         meta_array = torch.cat((meta_array, metadata.to(device)))
         num_samples += inputs.size()[0]
         optimizer.zero_grad()
+        # if batch_idx == 0: target_test = targets
+        # if batch_idx == 5: 
+        #     print(targets)
+        #     print(target_test)
         
         with torch.cuda.amp.autocast():
             outputs = net(inputs)
@@ -799,7 +910,8 @@ def train_loop(scaler, epoch, step, net, dataloader, batch_size, data_size, opti
     losses = losses.detach()
     y_array = y_array.detach().int()
     meta_array = meta_array.detach()
-
+    # print(y_array[:128])
+    # print(y_array[-128:])
     return train_loss/len(dataloader), 100.*correct/total, probabilities, losses, y_array, meta_array
 
 # Test

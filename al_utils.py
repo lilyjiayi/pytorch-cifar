@@ -145,7 +145,10 @@ def threshold_query(model, device, pool_data, val_data, grouper, query_size, bat
 
   if group_balance:
     weights = 100.0 - atc_groups
+    # atc_groups[i] = 0 if group i is empty; we want to select no points from empty group
+    weights[np.nonzero(weights == 100)[0]] = 0
     weights = weights/np.sum(weights)
+    print(f"threshold_group selection weights are {weights}")
     # sample_idx = np.random.choice(candidate_idx, query_size, replace=False, p=weights)
     mask = np.zeros(len(pool_data))
     mask[candidate_idx] = 1
@@ -217,7 +220,7 @@ def atc(model, device, target_data, source_val_data, grouper, batch_size, num_wo
 
   print(f"ATC estimated accuracy on target data is {atc_acc}")
   print(f"ATC estimated threshold on target data is {group_threshold[0]}")
-  # print(f"ATC estimated accuracy on target groups are {atc_groups}")
+  print(f"ATC estimated accuracy on target groups are {atc_groups}")
   # print(f"ATC estimated threshold on target groups are {group_threshold}")
 
   results = compare_actual_error(target_data, test_probs, candidate_idx, grouper)
@@ -365,12 +368,13 @@ def sample_from_distribution(distribution, dataset, unlabeled_mask, query_size, 
     
   for g in range(num_group):
     num_select = num_to_sample[g]
+    if num_select == 0: continue
     group_mask = (group == g)
     candidate_idx = np.nonzero(group_mask * unlabeled_mask)[0]
 
     # if unlabeled datapoints less than query_size, first label the available points and then sample from the group 
     if candidate_idx.size < num_select:
-      selected.append(candidate_idx)
+      selected = np.append(selected, candidate_idx)
       num_select -= candidate_idx.size
       candidate_idx = np.nonzero(group_mask)[0] 
     
@@ -389,7 +393,7 @@ def sample_from_distribution(distribution, dataset, unlabeled_mask, query_size, 
       # pool_loader = Loader(**loader_args)
       pool_loader = ffcv_train_val_loader(dataset_name, indices=subset_idx, num_workers=num_workers, batch_size=batch_size, pin_memory=True)
     else:
-      pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers)
+      pool_loader = DataLoader(pool_data, shuffle = False, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
     
     print(f"Querying group {g} for {num_select} elements...")
     if query_strategy == 'random':
@@ -447,31 +451,65 @@ def query_the_oracle(unlabeled_mask, model, device, dataset, val_data, grouper, 
     group = np.array(group)
     group_counts = np.array(group_counts)
     num_group = len(group_counts)
+
+    # if include is not None, only included groups' validation data is used for selecting samples for query
+    if include is not None: 
+      val_group, val_group_counts = grouper.metadata_to_group(val_data.metadata_array, return_counts=True)
+      val_group = np.array(val_group)
+      val_idx = np.array([])
+      for i in include: 
+        val_idx = np.append(val_idx, np.nonzero(val_group == i)[0])
+      val_data = WILDSSubset(val_data, val_idx, transform=None)
+      if val_probs is not None:
+        val_probs = val_probs[val_idx]
     
+    val_group, val_group_counts = grouper.metadata_to_group(val_data.metadata_array, return_counts=True)
+    print(f"Val set used for sampling has group counts: {np.array(val_group_counts)}")
+    
+    if include is not None:
+      mask = np.zeros(num_group)
+      for i in include:
+        mask[i] = 1
+    else:
+      mask = np.ones(num_group)
+
+    # scenario where include is not None is not fully implemented
     if group_strategy == 'uniform':
-      sample_distribution = np.ones(num_group)/num_group
-    elif group_strategy == 'loss_proportional':
+      sample_distribution = mask / np.sum(mask)
+    elif group_strategy == 'loss_prop':
       assert group_losses is not None, "Query strategy is loss_proportional: require input of group_losses"
       assert group_losses.size == num_group, f"Query strategy is loss_proportional: input of group_losses has incorrect number of groups {group_losses.size}, required {num_group}"
+      group_losses *= mask
       sample_distribution = group_losses / np.sum(group_losses)
       print(f"Loss proportional query: ")
       print(f"group losses are {group_losses}")
-    elif group_strategy == 'error_proportional':
+    elif group_strategy == 'error_prop':
       group_errors = 1.0 - group_acc
+      group_errors *= mask
       sample_distribution = group_errors / np.sum(group_errors)
       print(f"Error proportional query: ")
       print(f"group error rates are {group_errors}")
     elif group_strategy == 'loss_exp':
       exp_losses = np.exp(group_losses)
+      exp_losses *= mask
       sample_distribution = exp_losses / np.sum(exp_losses)
       print(f"Loss exponential query: ")
       print(f"group losses are {group_losses}")
+      print(f"Sample distribution is {sample_distribution}")
+    elif group_strategy == 'oracle':
+      sample_distribution = np.zeros(num_group)
+      group_errors = (1.0 - group_acc) * mask
+      sample_distribution[np.argmax(group_errors)] = 1
     elif group_strategy == 'interpolate':
       wg_dis = np.zeros(num_group)
-      wg_dis[np.argmin(group_acc)] = 1
-      uniform_dis = np.ones(num_group)/num_group
+      group_errors = (1.0 - group_acc) * mask
+      wg_dis[np.argmax(group_errors)] = 1
+      uniform_dis = mask/np.sum(mask)
       sample_distribution = p * wg_dis + p * uniform_dis
       print(f"Interpolation with alpha {p} query: ")
+    elif group_strategy == 'ambient':
+      ambient_counts = group_counts * mask
+      sample_distribution = ambient_counts/np.sum(ambient_counts)
     
     if sample_distribution is not None:
       print(f"sample distribution is {sample_distribution}")
