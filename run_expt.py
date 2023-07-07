@@ -214,7 +214,7 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
   #             " --resume --checkpoint ./checkpoint/unbalanced_domainnet_1k_50-random-2usmsmuo/0.pth"
 
   # domainnet six
-  base_command = "python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet {sample_command}" \
+  base_command = f"python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet {sample_command}" \
                " --model resnet18 --pretrain" \
                " --frac 0.05 --drop_last --iweight_decay 1e-4 --weight_decay 1e-4" \
                " --inum_epoch 50 --num_epoch 50 --new_model --save_every 5" \
