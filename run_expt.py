@@ -245,10 +245,14 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
   subprocess.run(command, shell=True)
 
 
-job_num = 600
-# checkpoint = './checkpoint/domainnet_40_mixture-random_clip_quick_real-2denf8ag/0.pth'
-checkpoint = None
-run_expt(None, 'random', job_num, id = None, name = 'random_1356', distribution = '1,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+# job_num = 600
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_clip_quick_real-2denf8ag/0.pth'
+# checkpoint = None
+# run_expt(None, 'random', job_num, id = None, name = 'random_1356', distribution = '1,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 601
+checkpoint = './checkpoint/domainnet_10k_500_rerun-random_1356-1sqmmufw/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin_1356', distribution = '1,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
 
 
 # domainnet 40 threshold group
