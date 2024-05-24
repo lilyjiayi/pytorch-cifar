@@ -146,6 +146,7 @@ def main():
     pin_memory = not(args.no_pin_memory)
 
     # wandb setup
+    wandb.login()
     id = wandb.util.generate_id() if not args.wandb_id else args.wandb_id
     mode = 'disabled' if not (args.wandb_group and args.wandb_name) else 'online'
     name = f'{args.wandb_name}-{id}'
@@ -381,6 +382,7 @@ def main():
     
     num_classes = train_data.n_classes  # number of classes in the classification problem
     print(f"num_classes is {num_classes}")
+    os.environ['TORCH_HOME'] = "/nlp/scr/jiayili/models"
     net = make_model(args.model, num_classes=num_classes, pretrained=args.pretrain)
     net = net.to(device)
     scaler = torch.cuda.amp.GradScaler()

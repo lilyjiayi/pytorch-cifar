@@ -100,10 +100,10 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
   add_on = ",jagupard21,jagupard22,jagupard23,jagupard24,jagupard25,jagupard26,jagupard27"
   excluded_machines = excluded_machines + add_on
   priority = " -p high" if p_high else ""
-  # launch_command = f"nlprun -g 1 -c 10 -d a6000 -n {job_num} -o ./out/{job_num}.out" + priority
-  # launch_command = f"nlprun -g 1 -c 10 -x {excluded_machines} -n {job_num} -o ./out/{job_num}.out" + priority
+  launch_command = f"nlprun -r 50g -g 1 -c 10 -d a6000 -n {job_num} -o ./out/{job_num}.out" + priority
+  # launch_command = f"nlprun -r 50g -g 1 -c 10 -x {excluded_machines} -n {job_num} -o ./out/{job_num}.out" + priority
   # launch_command = f"nlprun -g 1 -c 10 -n {job_num} -o ./out/{job_num}.out" + priority
-  launch_command = f"nlprun -r 50g -g 1 -c 10 -q sphinx -x sphinx3 -n {job_num} -o ./out/{job_num}.out" + priority
+  # launch_command = f"nlprun -r 50g -g 1 -c 10 -q sphinx -x sphinx3 -n {job_num} -o ./out/{job_num}.out" + priority
   if id is None: id = wandb.util.generate_id()
   # if name is None: name = f"{group}_{query}"
 
@@ -123,10 +123,12 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
   else:
     checkpoint_command = f" --resume --checkpoint {checkpoint}"
 
-  if query == 'random':
-    num_query = 150
-  else:
-    num_query = 50
+  # if query == 'random':
+  #   num_query = 150
+  # else:
+  #   num_query = 50
+    
+  num_query = 50
 
   if distribution is not None: 
     sample_command = f'--include {distribution}'
@@ -201,6 +203,20 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
   #              f" --wandb_group domainnet_40_mixture --wandb_name {name} --wandb_id {id} --save" \
   #              f"{checkpoint_command}"    
   
+  # domainnet six with 40 classes with randomization
+  base_command = f"python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet --use_40_class {sample_command}" \
+               " --model resnet18 --pretrain" \
+               " --frac 0.05 --drop_last --iweight_decay 1e-4 --weight_decay 1e-4" \
+               " --inum_epoch 50 --num_epoch 50 --new_model --save_every 10" \
+               " --ilr 5e-3 --lr 5e-3  --ischedule cosine  --schedule cosine" \
+               f" --seed_size 1000 --pool_size 1000 --query_size 50 --num_queries {num_query}" \
+               " --group_div standard" \
+               f"{query_command}" \
+               f" --wandb_group domainnet_40_mixture_randomized --wandb_name {name} --wandb_id {id} --save" \
+               f"{checkpoint_command}"   
+  #  f" --wandb_group domainnet_40_mixture --wandb_name {name} --wandb_id {id} --save" \
+
+
   # unbalanced domainnet sentry
   # base_command = "python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet --use_sentry --subsampled" \
   #              " --model resnet18 --pretrain" \
@@ -214,17 +230,17 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
   #             " --resume --checkpoint ./checkpoint/unbalanced_domainnet_1k_50-random-2usmsmuo/0.pth"
 
   # domainnet six
-  base_command = f"python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet {sample_command}" \
-               " --model resnet18 --pretrain" \
-               " --frac 0.05 --drop_last --iweight_decay 1e-4 --weight_decay 1e-4" \
-               " --inum_epoch 50 --num_epoch 50 --new_model --save_every 5" \
-               " --ilr 5e-3 --lr 5e-3  --ischedule cosine  --schedule cosine" \
-               " --seed_size 10000 --pool_size 40000 --query_size 500 --num_queries 50" \
-               " --group_div standard" \
-              f"{query_command}" \
-              f" --wandb_group domainnet_10k_500_rerun --wandb_name {name} --wandb_id {id} --save" \
-              f"{checkpoint_command}"
-              #  " --resume --checkpoint ./checkpoint/domainnet_10k_500_rerun-random-1lnj092i/0.pth"
+  # base_command = f"python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet {sample_command}" \
+  #              " --model resnet18 --pretrain" \
+  #              " --frac 0.05 --drop_last --iweight_decay 1e-4 --weight_decay 1e-4" \
+  #              " --inum_epoch 50 --num_epoch 50 --new_model --save_every 5" \
+  #              " --ilr 5e-3 --lr 5e-3  --ischedule cosine  --schedule cosine" \
+  #              " --seed_size 10000 --pool_size 40000 --query_size 500 --num_queries 50" \
+  #              " --group_div standard" \
+  #             f"{query_command}" \
+  #             f" --wandb_group domainnet_10k_500_rerun --wandb_name {name} --wandb_id {id} --save" \
+  #             f"{checkpoint_command}"
+  #             #  " --resume --checkpoint ./checkpoint/domainnet_10k_500_rerun-random-1lnj092i/0.pth"
   
   # domainnet sentry
   # base_command = "python ffcv_al_script.py --num_workers 8 --batch_size 128 --dataset domainnet --use_sentry" \
@@ -250,26 +266,170 @@ def run_expt(group, query, job_num, id = None, name = None, distribution = None,
 # checkpoint = None
 # run_expt(None, 'random', job_num, id = None, name = 'random_1356', distribution = '1,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
 
-job_num = 601
-checkpoint = './checkpoint/domainnet_10k_500_rerun-random_1356-1sqmmufw/0.pth'
-run_expt(None, 'margin', job_num, id = None, name = 'margin_1356', distribution = '1,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+# job_num = 601
+# checkpoint = './checkpoint/domainnet_10k_500_rerun-random_1356-1sqmmufw/0.pth'
+# run_expt(None, 'margin', job_num, id = None, name = 'margin_1356', distribution = '1,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+
+
+# 12345
+# 356
+# 145
+# 234
+# 345
+# 2456
+# 1245
+# 1236
+# 1346
+# 12346
+# 13456
+# 12356
+
+# job_num = 643
+# checkpoint = './checkpoint/domainnet_40_mixture-random_noquick_sketch-ueofyv2v/0.pth'
+# run_expt('error_prop', 'margin', job_num, id = None, name = 'error_prop_margin_1235', distribution = '1,1,1,0,1,0', score_ma = True, checkpoint=checkpoint)
+  
+# job_num = 645
+# checkpoint = './checkpoint/domainnet_40_mixture-random_nopaint_real-2xxweimk/0.pth'
+# run_expt('error_prop', 'margin', job_num, id = None, name = 'error_prop_margin_1246', distribution = '1,1,0,1,0,1', score_ma = True, checkpoint=checkpoint)
+
+
+
+# domainnet 40 with randomization
+# checkpoint = None
+# # job_num = 639
+# # # checkpoint = './checkpoint/domainnet_40_mixture-random_clip_quick_real-2denf8ag/0.pth'
+# # run_expt(None, 'random', job_num, id = None, name = 'random_145', distribution = '1,0,0,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+# checkpoint = None
+# job_num = 640
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_paint_real_sketch-2ajv3odb/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_356', distribution = '0,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 641
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_paint_quick_real-2agtvwte/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_345', distribution = '0,0,1,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 642
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_info_paint_quick-24cb7b9o/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_234', distribution = '0,1,1,1,0,0', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 643
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_nosketch-2z6pbn2k/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_12345', distribution = '1,1,1,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 644
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_noclip_paint-22uay2y6/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_2456', distribution = '0,1,0,1,1,1', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 645
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_noquickdraw_real-3tl5gufy/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_1236', distribution = '1,1,1,0,0,1', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 646
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_nopainting_sketch-37uhigat/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_1245', distribution = '1,1,0,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 647
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_noinfograph_real-wqlybgna/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_1346', distribution = '1,0,1,1,0,1', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 648
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_noreal-w1qyse1t/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_12346', distribution = '1,1,1,1,0,1', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 649
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_noinfograph-3dobrdvk/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_13456', distribution = '1,0,1,1,1,1', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 650
+# # checkpoint = './checkpoint/domainnet_40_mixture-random_noquickdraw-18bvjd9e/0.pth'
+# run_expt(None, 'random', job_num, id = None, name = 'random_12356', distribution = '1,1,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+
+
+############## domainnet_40_randomized margin
+job_num = 671
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_145-2hoihxgg/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_145', distribution = '1,0,0,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+
+job_num = 672
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_356-17m090dk/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_356', distribution = '0,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 673
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_345-2ilvpeym/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_345', distribution = '0,0,1,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+job_num = 674
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_234-2chkr3na/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_234', distribution = '0,1,1,1,0,0', score_ma = True, checkpoint=checkpoint)
+
+job_num = 675
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_12345-y5fpo7tt/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_12345', distribution = '1,1,1,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+job_num = 676
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_2456-zwugc1og/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_2456', distribution = '0,1,0,1,1,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 677
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_1236-1jtbumhc/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_1236', distribution = '1,1,1,0,0,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 678
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_1245-3vj8h9no/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_1245', distribution = '1,1,0,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+job_num = 679
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_1346-2gei0835/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_1346', distribution = '1,0,1,1,0,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 680
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_12346-1kk2kjft/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_12346', distribution = '1,1,1,1,0,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 681
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_13456-2d9g7ekv/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_13456', distribution = '1,0,1,1,1,1', score_ma = True, checkpoint=checkpoint)
+
+job_num = 682
+checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_12356-2v12v68r/0.pth'
+run_expt(None, 'margin', job_num, id = None, name = 'margin2_12356', distribution = '1,1,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+
+###### second run
+# checkpoint = None
+# job_num = 663
+# checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_356-17m090dk/0.pth'
+# run_expt(None, 'margin', job_num, id = None, name = 'margin_356', distribution = '0,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
+  
+# job_num = 664
+# checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_345-2ilvpeym/0.pth'
+# run_expt(None, 'margin', job_num, id = None, name = 'margin_345', distribution = '0,0,1,1,1,0', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 665
+# checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_234-2chkr3na/0.pth'
+# run_expt(None, 'margin', job_num, id = None, name = 'margin_234', distribution = '0,1,1,1,0,0', score_ma = True, checkpoint=checkpoint)
+
+# job_num = 666
+# checkpoint = './checkpoint/domainnet_40_mixture_randomized-random_12345-y5fpo7tt/0.pth'
+# run_expt(None, 'margin', job_num, id = None, name = 'margin_12345', distribution = '1,1,1,1,1,0', score_ma = True, checkpoint=checkpoint)
 
 
 # domainnet 40 threshold group
 # job_num = 639
-# checkpoint = './checkpoint/domainnet_40_mixture-random_clip_quick_real-2denf8ag/0.pth'
+## checkpoint = './checkpoint/domainnet_40_mixture-random_clip_quick_real-2denf8ag/0.pth'
 # run_expt('error_prop', 'margin', job_num, id = None, name = 'error_prop_margin_145', distribution = '1,0,0,1,1,0', score_ma = True, checkpoint=checkpoint)
 
 # job_num = 640
-# checkpoint = './checkpoint/domainnet_40_mixture-random_paint_real_sketch-2ajv3odb/0.pth'
+## checkpoint = './checkpoint/domainnet_40_mixture-random_paint_real_sketch-2ajv3odb/0.pth'
 # run_expt('error_prop', 'margin', job_num, id = None, name = 'error_prop_margin_356', distribution = '0,0,1,0,1,1', score_ma = True, checkpoint=checkpoint)
 
 # job_num = 641
-# checkpoint = './checkpoint/domainnet_40_mixture-random_paint_quick_real-2agtvwte/0.pth'
+## checkpoint = './checkpoint/domainnet_40_mixture-random_paint_quick_real-2agtvwte/0.pth'
 # run_expt('error_prop', 'margin', job_num, id = None, name = 'error_prop_margin_345', distribution = '0,0,1,1,1,0', score_ma = True, checkpoint=checkpoint)
 
 # job_num = 642
-# checkpoint = './checkpoint/domainnet_40_mixture-random_info_paint_quick-24cb7b9o/0.pth'
+## checkpoint = './checkpoint/domainnet_40_mixture-random_info_paint_quick-24cb7b9o/0.pth'
 # run_expt('error_prop', 'margin', job_num, id = None, name = 'error_prop_margin_234', distribution = '0,1,1,1,0,0', score_ma = True, checkpoint=checkpoint)
 
 # job_num = 643
